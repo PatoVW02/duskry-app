@@ -63,6 +63,12 @@ jobs:
           VITE_CHECKOUT_PRO_YEARLY: ${{ secrets.VITE_CHECKOUT_PRO_YEARLY }}
           VITE_CHECKOUT_PROPLUS_MONTHLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_MONTHLY }}
           VITE_CHECKOUT_PROPLUS_YEARLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_YEARLY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Duskry ${{ github.ref_name }}'
@@ -81,7 +87,14 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: |
           DMG=$(find . -path "*/target/${{ matrix.dmg-dir }}/release/bundle/dmg/*.dmg" | head -1)
-          cp "$DMG" "${{ matrix.dmg-alias }}"
+          WORK=$(mktemp -d)
+          MOUNT=$(mktemp -d)
+          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -noautoopen
+          cp -R "$MOUNT"/. "$WORK/"
+          hdiutil detach "$MOUNT"
+          APP=$(find "$WORK" -maxdepth 1 -name "*.app" | head -1)
+          codesign --remove-signature "$APP" || true
+          hdiutil create -volname "Duskry" -srcfolder "$WORK" -ov -format UDZO "${{ matrix.dmg-alias }}"
           gh release upload "${{ github.ref_name }}" "${{ matrix.dmg-alias }}" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -124,6 +137,12 @@ jobs:
           VITE_CHECKOUT_PRO_YEARLY: ${{ secrets.VITE_CHECKOUT_PRO_YEARLY }}
           VITE_CHECKOUT_PROPLUS_MONTHLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_MONTHLY }}
           VITE_CHECKOUT_PROPLUS_YEARLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_YEARLY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Duskry ${{ github.ref_name }}'
@@ -141,7 +160,14 @@ jobs:
       - name: Upload version-agnostic DMG alias
         run: |
           DMG=$(find . -path "*/target/universal-apple-darwin/release/bundle/dmg/*.dmg" | head -1)
-          cp "$DMG" "Duskry_universal.dmg"
+          WORK=$(mktemp -d)
+          MOUNT=$(mktemp -d)
+          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -noautoopen
+          cp -R "$MOUNT"/. "$WORK/"
+          hdiutil detach "$MOUNT"
+          APP=$(find "$WORK" -maxdepth 1 -name "*.app" | head -1)
+          codesign --remove-signature "$APP" || true
+          hdiutil create -volname "Duskry" -srcfolder "$WORK" -ov -format UDZO "Duskry_universal.dmg"
           gh release upload "${{ github.ref_name }}" "Duskry_universal.dmg" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
