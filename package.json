@@ -1,14 +1,15 @@
 {
   "name": "duskry",
   "private": true,
-  "version": "0.1.15",
+  "version": "0.1.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "release": "node -e \"const v=require('./package.json').version;const {execSync}=require('child_process');execSync('git tag v'+v,{stdio:'inherit'});execSync('git push origin v'+v,{stdio:'inherit'});\""
+    "release": "bash scripts/release-mac.sh",
+    "release:tag-only": "node -e \"const v=require('./package.json').version;const {execSync}=require('child_process');execSync('git tag v'+v,{stdio:'inherit'});execSync('git push origin v'+v,{stdio:'inherit'});\""
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

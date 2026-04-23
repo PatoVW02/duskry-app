@@ -1,4 +1,4 @@
-name: Release
+name: Release (Windows)
 
 on:
   push:
@@ -6,31 +6,12 @@ on:
       - 'v*'
 
 jobs:
-  # ── Build arm64, x64 (mac) and Windows in parallel ──────────────────────
-  build:
+  # Mac builds are done locally via: npm run release
+  # This job handles Windows only.
+  build-windows:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
-            rust-targets: 'aarch64-apple-darwin'
-            dmg-dir: 'aarch64-apple-darwin'
-            dmg-alias: 'Duskry_arm64.dmg'
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
-            rust-targets: 'x86_64-apple-darwin'
-            dmg-dir: 'x86_64-apple-darwin'
-            dmg-alias: 'Duskry_x64.dmg'
-          - platform: windows-latest
-            args: ''
-            rust-targets: ''
-            dmg-dir: ''
-            dmg-alias: ''
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +24,6 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -54,21 +33,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build and publish release
+      - name: Build and publish Windows release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          VITE_CHECKOUT_PRO_MONTHLY: ${{ secrets.VITE_CHECKOUT_PRO_MONTHLY }}
-          VITE_CHECKOUT_PRO_YEARLY: ${{ secrets.VITE_CHECKOUT_PRO_YEARLY }}
-          VITE_CHECKOUT_PROPLUS_MONTHLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_MONTHLY }}
-          VITE_CHECKOUT_PROPLUS_YEARLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_YEARLY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VITE_CHECKOUT_PRO_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/19796589-e460-4e38-8513-0b060194031d
+          VITE_CHECKOUT_PRO_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/ef3fcef5-e5d2-4b78-8b50-71739ffdc0fd
+          VITE_CHECKOUT_PROPLUS_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/e4ce5c2b-7fab-4398-88c0-ad66bef7ed6a
+          VITE_CHECKOUT_PROPLUS_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/113dc867-f131-4b35-812c-66bddd3aa278
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Duskry ${{ github.ref_name }}'
@@ -77,97 +50,8 @@ jobs:
 
             See the assets below to download and install Duskry.
 
-            **macOS**: Download the `.dmg` file
+            **macOS**: Download the `.dmg` file for your chip
             **Windows**: Download the `.msi` or `.exe` installer
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
 
-      - name: Upload version-agnostic DMG alias
-        if: matrix.platform == 'macos-latest'
-        run: |
-          DMG=$(find . -path "*/target/${{ matrix.dmg-dir }}/release/bundle/dmg/*.dmg" | head -1)
-          WORK=$(mktemp -d)
-          MOUNT=$(mktemp -d)
-          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -noautoopen
-          cp -R "$MOUNT"/. "$WORK/"
-          hdiutil detach "$MOUNT"
-          APP=$(find "$WORK" -maxdepth 1 -name "*.app" | head -1)
-          codesign --remove-signature "$APP" || true
-          hdiutil create -volname "Duskry" -srcfolder "$WORK" -ov -format UDZO "${{ matrix.dmg-alias }}"
-          gh release upload "${{ github.ref_name }}" "${{ matrix.dmg-alias }}" --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ── Build universal (runs after others so its latest.json wins) ──────────
-  build-universal:
-    needs: build
-    permissions:
-      contents: write
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install frontend dependencies
-        run: npm install
-
-      - name: Build and publish release (universal)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          VITE_CHECKOUT_PRO_MONTHLY: ${{ secrets.VITE_CHECKOUT_PRO_MONTHLY }}
-          VITE_CHECKOUT_PRO_YEARLY: ${{ secrets.VITE_CHECKOUT_PRO_YEARLY }}
-          VITE_CHECKOUT_PROPLUS_MONTHLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_MONTHLY }}
-          VITE_CHECKOUT_PROPLUS_YEARLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_YEARLY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Duskry ${{ github.ref_name }}'
-          releaseBody: |
-            ## What's new
-
-            See the assets below to download and install Duskry.
-
-            **macOS**: Download the `.dmg` file
-            **Windows**: Download the `.msi` or `.exe` installer
-          releaseDraft: false
-          prerelease: false
-          args: '--target universal-apple-darwin'
-
-      - name: Upload version-agnostic DMG alias
-        run: |
-          DMG=$(find . -path "*/target/universal-apple-darwin/release/bundle/dmg/*.dmg" | head -1)
-          WORK=$(mktemp -d)
-          MOUNT=$(mktemp -d)
-          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -noautoopen
-          cp -R "$MOUNT"/. "$WORK/"
-          hdiutil detach "$MOUNT"
-          APP=$(find "$WORK" -maxdepth 1 -name "*.app" | head -1)
-          codesign --remove-signature "$APP" || true
-          hdiutil create -volname "Duskry" -srcfolder "$WORK" -ov -format UDZO "Duskry_universal.dmg"
-          gh release upload "${{ github.ref_name }}" "Duskry_universal.dmg" --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
