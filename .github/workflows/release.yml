@@ -51,7 +51,31 @@ jobs:
             See the assets below to download and install Duskry.
 
             **macOS**: Download the `.dmg` file for your chip
+            > If macOS shows a security warning, go to **System Settings → Privacy & Security → Open Anyway**
+
             **Windows**: Download the `.msi` or `.exe` installer
           releaseDraft: false
           prerelease: false
+
+      - name: Merge Mac + Windows updater manifests
+        shell: bash
+        run: |
+          # tauri-action uploaded a Windows-only latest.json; merge Mac entries back in
+          # Retry a few times in case the Mac script is still uploading
+          for i in 1 2 3 4 5; do
+            gh release download "${{ github.ref_name }}" --pattern "mac-latest.json" -O mac-latest.json --clobber 2>/dev/null && break
+            echo "Waiting for mac-latest.json (attempt $i/5)..."
+            sleep 30
+          done
+
+          if [ -f mac-latest.json ]; then
+            gh release download "${{ github.ref_name }}" --pattern "latest.json" -O win-latest.json --clobber
+            jq -s '{version: .[0].version, notes: .[0].notes, pub_date: .[0].pub_date, platforms: (.[0].platforms + .[1].platforms)}' mac-latest.json win-latest.json > latest.json
+            gh release upload "${{ github.ref_name }}" latest.json --clobber
+            echo "Merged Mac + Windows updater manifests into latest.json"
+          else
+            echo "mac-latest.json not found — latest.json will be Windows-only"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
