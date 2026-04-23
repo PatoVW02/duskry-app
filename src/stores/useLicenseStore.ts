@@ -1,0 +1,63 @@
+import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
+import { daysLeft } from '../lib/utils';
+
+export type Tier = 'free' | 'proTrial' | 'pro' | 'proPlus' | 'expired';
+/** The plan the user chose during onboarding ('free' means they opted out of trial). */
+export type SelectedPlan = 'free' | 'pro' | 'proPlus';
+
+/** Feature gate helpers — use these throughout the app. */
+export function isPro(tier: Tier)     { return tier === 'pro' || tier === 'proPlus' || tier === 'proTrial'; }
+export function isProPlus(tier: Tier) { return tier === 'proPlus'; }
+
+interface LicenseStore {
+  tier: Tier;
+  trialExpiresAt: number;
+  trialEmail: string;
+  /** The plan the user chose during onboarding (persisted). */
+  selectedPlan: SelectedPlan;
+  fetchTier: () => Promise<void>;
+  setSelectedPlan: (plan: SelectedPlan) => Promise<void>;
+  startTrial: (email: string, expiresAt: number) => Promise<void>;
+  activateLicense: (key: string) => Promise<void>;
+  daysRemaining: () => number;
+}
+
+export const useLicenseStore = create<LicenseStore>((set, get) => ({
+  tier: 'free',
+  trialExpiresAt: 0,
+  trialEmail: '',
+  selectedPlan: 'pro',
+
+  fetchTier: async () => {
+    try {
+      const tier = await invoke<string>('get_license_tier');
+      const expiresStr = await invoke<string | null>('get_setting', { key: 'trial_expires_at' });
+      const email = await invoke<string | null>('get_setting', { key: 'trial_email' });
+      const plan  = await invoke<string | null>('get_setting', { key: 'selected_plan' });
+      set({
+        tier: tier as Tier,
+        trialExpiresAt: parseInt(expiresStr ?? '0'),
+        trialEmail: email ?? '',
+        selectedPlan: (plan ?? 'pro') as SelectedPlan,
+      });
+    } catch {}
+  },
+
+  setSelectedPlan: async (plan) => {
+    try { await invoke('set_setting', { key: 'selected_plan', value: plan }); } catch {}
+    set({ selectedPlan: plan });
+  },
+
+  startTrial: async (email, expiresAt) => {
+    await invoke('start_trial', { email, expiresAt });
+    set({ tier: 'proTrial', trialExpiresAt: expiresAt, trialEmail: email });
+  },
+
+  activateLicense: async (key) => {
+    const tier = await invoke<string>('validate_license', { key });
+    set({ tier: tier as Tier });
+  },
+
+  daysRemaining: () => daysLeft(get().trialExpiresAt),
+}));
