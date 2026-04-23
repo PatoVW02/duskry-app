@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import { Appearance } from './Appearance';
 import { Tracking } from './Tracking';
 import { Billing } from './Billing';
@@ -46,6 +47,11 @@ export function Settings() {
 
 function AboutTab() {
   const { status, checkForUpdates, downloadAndInstall } = useUpdater();
+  const [version, setVersion] = useState<string>('...');
+
+  useEffect(() => {
+    getVersion().then(setVersion);
+  }, []);
 
   const isChecking = status.state === 'checking';
   const isDownloading = status.state === 'downloading';
@@ -58,7 +64,7 @@ function AboutTab() {
       {/* App identity */}
       <div style={{ textAlign: 'center', marginBottom: 28 }}>
         <div style={{ fontSize: 22, fontWeight: 600, color: 'rgba(45,212,191,0.9)', marginBottom: 8 }}>duskry</div>
-        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.50)', marginBottom: 4 }}>Version 0.1.0</div>
+        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.50)', marginBottom: 4 }}>Version {version}</div>
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.28)' }}>
           Automatic time tracking for Mac &amp; Windows.
         </div>
