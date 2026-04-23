@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 
@@ -10,13 +10,15 @@ export type UpdateStatus =
   | { state: 'downloading'; progress: number }
   | { state: 'error'; message: string };
 
-const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+export const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 export function useUpdater() {
   const [status, setStatus] = useState<UpdateStatus>({ state: 'idle' });
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const checkingRef = useRef(false);
 
   async function checkForUpdates() {
+    if (checkingRef.current) return;
+    checkingRef.current = true;
     setStatus({ state: 'checking' });
     try {
       const update = await check();
@@ -27,6 +29,8 @@ export function useUpdater() {
       }
     } catch (err) {
       setStatus({ state: 'error', message: String(err) });
+    } finally {
+      checkingRef.current = false;
     }
   }
 
@@ -51,19 +55,6 @@ export function useUpdater() {
       setStatus({ state: 'error', message: String(err) });
     }
   }
-
-  useEffect(() => {
-    // Check on startup after a short delay so the app finishes loading first
-    const timer = setTimeout(checkForUpdates, 3000);
-
-    // Then check every 4 hours
-    intervalRef.current = setInterval(checkForUpdates, CHECK_INTERVAL_MS);
-
-    return () => {
-      clearTimeout(timer);
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, []);
 
   return { status, checkForUpdates, downloadAndInstall };
 }

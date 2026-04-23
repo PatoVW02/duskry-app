@@ -4,7 +4,7 @@ import { Appearance } from './Appearance';
 import { Tracking } from './Tracking';
 import { Billing } from './Billing';
 import { Palette, Info, SlidersHorizontal, CreditCard, RefreshCw, Download, CheckCircle, AlertCircle } from 'lucide-react';
-import { useUpdater } from '../../hooks/useUpdater';
+import { useUpdaterContext } from '../../contexts/UpdaterContext';
 
 type SettingsTab = 'appearance' | 'tracking' | 'billing' | 'about';
 
@@ -46,7 +46,7 @@ export function Settings() {
 }
 
 function AboutTab() {
-  const { status, checkForUpdates, downloadAndInstall } = useUpdater();
+  const { status, checkForUpdates, downloadAndInstall } = useUpdaterContext();
   const [version, setVersion] = useState<string>('...');
 
   useEffect(() => {
@@ -122,7 +122,7 @@ function AboutTab() {
         {hasUpdate ? (
           <button
             className="btn-primary"
-            style={{ alignSelf: 'flex-start', fontSize: 13 }}
+            style={{ alignSelf: 'flex-start', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, width: 'auto', padding: '8px 16px' }}
             onClick={downloadAndInstall}
             disabled={isDownloading}
           >
@@ -131,12 +131,11 @@ function AboutTab() {
           </button>
         ) : (
           <button
-            className="btn-secondary"
-            style={{ alignSelf: 'flex-start', fontSize: 13 }}
+            className="btn-update"
             onClick={checkForUpdates}
             disabled={isChecking || isDownloading}
           >
-            <RefreshCw size={13} style={isChecking ? { animation: 'spin 1s linear infinite' } : undefined} />
+            <RefreshCw size={13} className={isChecking ? 'icon-spin' : ''} />
             {isChecking ? 'Checking…' : 'Check for updates'}
           </button>
         )}

@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import './index.css';
+import { useUpdater, CHECK_INTERVAL_MS } from './hooks/useUpdater';
+import { UpdaterContext } from './contexts/UpdaterContext';
 
 import { SceneBackground } from './components/layout/SceneBackground';
 import { Sidebar } from './components/layout/Sidebar';
@@ -40,6 +42,9 @@ const PAGE_TITLES: Record<Page, string> = {
 function App() {
   const [page, setPage] = useState<Page>('overview');
   const [obStep, setObStep] = useState<OnboardingStep>(0);
+  const updater = useUpdater();
+  const updaterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updaterIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { onboardingComplete, loadSettings } = useSettingsStore();
   const { tier, fetchTier } = useLicenseStore();
@@ -60,6 +65,17 @@ function App() {
       invoke('start_tracking');
     }
   }, [onboardingComplete]);
+
+  // Auto-check for updates once on startup, then every 4 hours
+  useEffect(() => {
+    updaterTimerRef.current = setTimeout(updater.checkForUpdates, 3000);
+    updaterIntervalRef.current = setInterval(updater.checkForUpdates, CHECK_INTERVAL_MS);
+    return () => {
+      if (updaterTimerRef.current) clearTimeout(updaterTimerRef.current);
+      if (updaterIntervalRef.current) clearInterval(updaterIntervalRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Onboarding ──────────────────────────────────────────────
   if (!onboardingComplete) {
@@ -82,6 +98,7 @@ function App() {
 
   // ── Main app ─────────────────────────────────────────────────
   return (
+    <UpdaterContext.Provider value={updater}>
     <div className="app-shell">
       <SceneBackground />
       <div className="scene-overlay" />
@@ -107,6 +124,7 @@ function App() {
         </div>
       </div>
     </div>
+    </UpdaterContext.Provider>
   );
 }
 
