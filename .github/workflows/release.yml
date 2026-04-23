@@ -67,3 +67,12 @@ jobs:
           prerelease: false
           updaterJsonEnabled: true
           args: ${{ matrix.args }}
+
+      - name: Upload version-agnostic DMG alias
+        if: matrix.platform == 'macos-latest'
+        run: |
+          DMG=$(find . -path "*/target/universal-apple-darwin/release/bundle/dmg/*.dmg" | head -1)
+          cp "$DMG" "Duskry_universal.dmg"
+          gh release upload "${{ github.ref_name }}" "Duskry_universal.dmg" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
