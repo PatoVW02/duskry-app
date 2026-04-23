@@ -6,7 +6,8 @@ on:
       - 'v*'
 
 jobs:
-  release:
+  # ── Build arm64, x64 (mac) and Windows in parallel ──────────────────────
+  build:
     permissions:
       contents: write
     strategy:
@@ -14,29 +15,20 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: '--target universal-apple-darwin'
-            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
-            dmg-dir: 'universal-apple-darwin'
-            dmg-alias: 'Duskry_universal.dmg'
-            updater-json: true
-          - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             rust-targets: 'aarch64-apple-darwin'
             dmg-dir: 'aarch64-apple-darwin'
             dmg-alias: 'Duskry_arm64.dmg'
-            updater-json: false
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
             rust-targets: 'x86_64-apple-darwin'
             dmg-dir: 'x86_64-apple-darwin'
             dmg-alias: 'Duskry_x64.dmg'
-            updater-json: false
           - platform: windows-latest
             args: ''
             rust-targets: ''
             dmg-dir: ''
             dmg-alias: ''
-            updater-json: false
 
     runs-on: ${{ matrix.platform }}
 
@@ -83,7 +75,6 @@ jobs:
             **Windows**: Download the `.msi` or `.exe` installer
           releaseDraft: false
           prerelease: false
-          updaterJsonEnabled: ${{ matrix.updater-json }}
           args: ${{ matrix.args }}
 
       - name: Upload version-agnostic DMG alias
@@ -92,5 +83,65 @@ jobs:
           DMG=$(find . -path "*/target/${{ matrix.dmg-dir }}/release/bundle/dmg/*.dmg" | head -1)
           cp "$DMG" "${{ matrix.dmg-alias }}"
           gh release upload "${{ github.ref_name }}" "${{ matrix.dmg-alias }}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Build universal (runs after others so its latest.json wins) ──────────
+  build-universal:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build and publish release (universal)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          VITE_CHECKOUT_PRO_MONTHLY: ${{ secrets.VITE_CHECKOUT_PRO_MONTHLY }}
+          VITE_CHECKOUT_PRO_YEARLY: ${{ secrets.VITE_CHECKOUT_PRO_YEARLY }}
+          VITE_CHECKOUT_PROPLUS_MONTHLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_MONTHLY }}
+          VITE_CHECKOUT_PROPLUS_YEARLY: ${{ secrets.VITE_CHECKOUT_PROPLUS_YEARLY }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Duskry ${{ github.ref_name }}'
+          releaseBody: |
+            ## What's new
+
+            See the assets below to download and install Duskry.
+
+            **macOS**: Download the `.dmg` file
+            **Windows**: Download the `.msi` or `.exe` installer
+          releaseDraft: false
+          prerelease: false
+          args: '--target universal-apple-darwin'
+
+      - name: Upload version-agnostic DMG alias
+        run: |
+          DMG=$(find . -path "*/target/universal-apple-darwin/release/bundle/dmg/*.dmg" | head -1)
+          cp "$DMG" "Duskry_universal.dmg"
+          gh release upload "${{ github.ref_name }}" "Duskry_universal.dmg" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -200,7 +200,7 @@ pub fn get_active_window() -> Option<ActiveWindow> {
 
     unsafe {
         let hwnd = GetForegroundWindow();
-        if hwnd.0 == 0 { return None; }
+        if hwnd.0.is_null() { return None; }
 
         let mut title_buf = [0u16; 512];
         let title_len = GetWindowTextW(hwnd, &mut title_buf);
