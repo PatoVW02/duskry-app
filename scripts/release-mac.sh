@@ -19,9 +19,10 @@ if [ -f "$ROOT_DIR/.env" ]; then
 fi
 
 # Load updater signing key (needed for .sig files used by auto-updater)
-KEY_FILE="/private/tmp/duskry_update.key"
+KEY_FILE="/private/tmp/duskry_v4.key"
 if [ -f "$KEY_FILE" ]; then
   export TAURI_SIGNING_PRIVATE_KEY=$(cat "$KEY_FILE")
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='Duskry2026!'
 else
   echo "Warning: signing key not found at $KEY_FILE — updater signatures will be skipped"
 fi
