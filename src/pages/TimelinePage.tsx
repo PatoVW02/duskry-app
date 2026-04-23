@@ -5,7 +5,7 @@ import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { formatDuration } from '../lib/utils';
-import { invoke } from '@tauri-apps/api/core';
+import { openCheckout } from '../lib/checkout';
 
 const HOUR_HEIGHT = 60; // px per hour
 const GUTTER      = 54; // px width for hour labels
@@ -84,9 +84,7 @@ export function TimelinePage() {
         <button
           className="btn-primary"
           style={{ maxWidth: 200, margin: '0 auto' }}
-          onClick={() => invoke('open_url', {
-            url: `https://duskry.lemonsqueezy.com/checkout/buy/your-${selectedPlan === 'proPlus' ? 'proplus' : 'pro'}-monthly-variant-id`,
-          })}
+          onClick={() => openCheckout(selectedPlan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly')}
         >
           Upgrade to Pro →
         </button>

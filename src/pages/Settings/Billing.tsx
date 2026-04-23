@@ -3,17 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { useLicenseStore, type SelectedPlan } from '../../stores/useLicenseStore';
 import { format, fromUnixTime } from 'date-fns';
 import { Check, ExternalLink } from 'lucide-react';
+import { openCheckout } from '../../lib/checkout';
 
-const VARIANT_IDS: Record<string, string> = {
-  pro_monthly:     'your-pro-monthly-variant-id',
-  pro_yearly:      'your-pro-yearly-variant-id',
-  proplus_monthly: 'your-proplus-monthly-variant-id',
-  proplus_yearly:  'your-proplus-yearly-variant-id',
-};
-
-function openCheckout(variant: string) {
-  invoke('open_url', { url: `https://duskry.lemonsqueezy.com/checkout/buy/${VARIANT_IDS[variant]}` });
-}
 function openPortal() {
   invoke('open_url', { url: 'https://app.lemonsqueezy.com/my-orders' });
 }

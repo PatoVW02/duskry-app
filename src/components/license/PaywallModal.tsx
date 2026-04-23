@@ -1,22 +1,13 @@
 import { useState } from 'react';
 import { SceneBackground } from '../layout/SceneBackground';
 import { useLicenseStore } from '../../stores/useLicenseStore';
-import { invoke } from '@tauri-apps/api/core';
+import { openCheckout, type CheckoutKey } from '../../lib/checkout';
 import { Check } from 'lucide-react';
 
-const VARIANT_IDS: Record<string, string> = {
-  pro_monthly:     'your-pro-monthly-variant-id',
-  pro_yearly:      'your-pro-yearly-variant-id',
-  proplus_monthly: 'your-proplus-monthly-variant-id',
-  proplus_yearly:  'your-proplus-yearly-variant-id',
-};
-
-function openCheckout(variant: string) {
-  const id = VARIANT_IDS[variant];
-  invoke('open_url', { url: `https://duskry.lemonsqueezy.com/checkout/buy/${id}` });
-}
-
-const PLAN_COPY = {
+const PLAN_COPY: Record<string, {
+  name: string; monthly: string; yearly: string; yearlySaving: string;
+  features: string[]; variantMonthly: CheckoutKey; variantYearly: CheckoutKey;
+}> = {
   pro: {
     name: 'Pro',
     monthly: '$5.99',

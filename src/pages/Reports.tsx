@@ -1,18 +1,12 @@
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
-import { invoke } from '@tauri-apps/api/core';
-
-const VARIANT_IDS: Record<string, string> = {
-  pro_monthly:     'your-pro-monthly-variant-id',
-  pro_yearly:      'your-pro-yearly-variant-id',
-};
+import { openCheckout } from '../lib/checkout';
 
 export function Reports() {
   const tier = useLicenseStore((s) => s.tier);
   const selectedPlan = useLicenseStore((s) => s.selectedPlan);
 
   if (!isPro(tier)) {
-    // If they chose pro/proPlus during onboarding, send them to subscribe; otherwise generic upgrade
-    const upgradeVariant = selectedPlan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly';
+    const upgradeKey = selectedPlan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly';
 
     return (
       <div className="glass-card" style={{ padding: '40px', textAlign: 'center' }}>
@@ -24,7 +18,7 @@ export function Reports() {
         <button
           className="btn-primary"
           style={{ maxWidth: 200, margin: '0 auto' }}
-          onClick={() => invoke('open_url', { url: `https://duskry.lemonsqueezy.com/checkout/buy/${VARIANT_IDS[upgradeVariant] ?? VARIANT_IDS.pro_monthly}` })}
+          onClick={() => openCheckout(upgradeKey)}
         >
           Upgrade to Pro →
         </button>
