@@ -16,9 +16,27 @@ jobs:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+            dmg-dir: 'universal-apple-darwin'
+            dmg-alias: 'Duskry_universal.dmg'
+            updater-json: true
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin'
+            dmg-dir: 'aarch64-apple-darwin'
+            dmg-alias: 'Duskry_arm64.dmg'
+            updater-json: false
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            rust-targets: 'x86_64-apple-darwin'
+            dmg-dir: 'x86_64-apple-darwin'
+            dmg-alias: 'Duskry_x64.dmg'
+            updater-json: false
           - platform: windows-latest
             args: ''
             rust-targets: ''
+            dmg-dir: ''
+            dmg-alias: ''
+            updater-json: false
 
     runs-on: ${{ matrix.platform }}
 
@@ -65,14 +83,14 @@ jobs:
             **Windows**: Download the `.msi` or `.exe` installer
           releaseDraft: false
           prerelease: false
-          updaterJsonEnabled: true
+          updaterJsonEnabled: ${{ matrix.updater-json }}
           args: ${{ matrix.args }}
 
       - name: Upload version-agnostic DMG alias
         if: matrix.platform == 'macos-latest'
         run: |
-          DMG=$(find . -path "*/target/universal-apple-darwin/release/bundle/dmg/*.dmg" | head -1)
-          cp "$DMG" "Duskry_universal.dmg"
-          gh release upload "${{ github.ref_name }}" "Duskry_universal.dmg" --clobber
+          DMG=$(find . -path "*/target/${{ matrix.dmg-dir }}/release/bundle/dmg/*.dmg" | head -1)
+          cp "$DMG" "${{ matrix.dmg-alias }}"
+          gh release upload "${{ github.ref_name }}" "${{ matrix.dmg-alias }}" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
