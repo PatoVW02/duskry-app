@@ -57,7 +57,11 @@ function Tooltip({ activity, project, pos }: { activity: Activity; project?: Pro
   );
 }
 
-export function Timeline() {
+interface TimelineProps {
+  highlightedProjectId?: number | null;
+}
+
+export function Timeline({ highlightedProjectId = null }: TimelineProps) {
   const activities = useActivityStore((s) => s.activities);
   const projects   = useProjectStore((s) => s.projects);
   const viewDate   = useActivityStore((s) => s.viewDate);
@@ -97,27 +101,38 @@ export function Timeline() {
         </div>
       </div>
       <div className="tl-track">
-        {blocks.map((a) => {
-          const left  = Math.max(0, ((a.started_at - rangeStart) / totalSecs) * 100);
-          const width = Math.max(0.15, ((a.duration_s ?? 0) / totalSecs) * 100);
-          const proj  = projects.find((p) => p.id === a.project_id);
-          const color = proj?.color ?? 'rgba(255,255,255,0.25)';
-          const isHovered = hovered?.id === a.id;
-          return (
-            <div
-              key={a.id}
-              className="tl-block"
-              style={{
-                left: `${left}%`,
-                width: `${width}%`,
-                background: color,
-                opacity: hovered && !isHovered ? 0.38 : 1,
-                zIndex: isHovered ? 4 : 1,
-                outline: isHovered ? '2px solid rgba(255,255,255,0.85)' : 'none',
-                outlineOffset: 1,
-                boxShadow: isHovered ? '0 0 0 4px rgba(45,212,191,0.18), 0 8px 22px rgba(0,0,0,0.28)' : undefined,
-                transform: isHovered ? 'scaleY(1.35)' : undefined,
-              }}
+	        {blocks.map((a) => {
+	          const left  = Math.max(0, ((a.started_at - rangeStart) / totalSecs) * 100);
+	          const width = Math.max(0.15, ((a.duration_s ?? 0) / totalSecs) * 100);
+	          const proj = projects.find((p) => p.id === a.project_id);
+	          const color = proj?.color ?? 'rgba(255,255,255,0.25)';
+	          const isHovered = hovered?.id === a.id;
+	          const isProjectMatch = highlightedProjectId !== null && a.project_id === highlightedProjectId;
+	          const hasProjectHighlight = highlightedProjectId !== null;
+	          const isDimmed = hovered ? !isHovered : hasProjectHighlight && !isProjectMatch;
+	          return (
+	            <div
+	              key={a.id}
+	              className="tl-block"
+	              style={{
+	                left: `${left}%`,
+	                width: `${width}%`,
+	                background: color,
+	                opacity: isDimmed ? 0.2 : 1,
+	                zIndex: isHovered ? 4 : isProjectMatch ? 3 : 1,
+	                outline: isHovered
+	                  ? '2px solid rgba(255,255,255,0.85)'
+	                  : isProjectMatch
+	                    ? '2px solid rgba(45,212,191,0.72)'
+	                    : 'none',
+	                outlineOffset: 1,
+	                boxShadow: isHovered
+	                  ? '0 0 0 4px rgba(45,212,191,0.18), 0 8px 22px rgba(0,0,0,0.28)'
+	                  : isProjectMatch
+	                    ? '0 0 0 3px rgba(45,212,191,0.14)'
+	                    : undefined,
+	                transform: isHovered ? 'scaleY(1.35)' : undefined,
+	              }}
               onMouseEnter={(e) => { setHovered(a); setTipPos({ x: e.clientX, y: e.clientY }); }}
               onMouseMove={(e) => setTipPos({ x: e.clientX, y: e.clientY })}
               onMouseLeave={() => setHovered(null)}

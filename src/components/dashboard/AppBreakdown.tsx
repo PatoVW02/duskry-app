@@ -8,7 +8,7 @@ export function AppBreakdown() {
   for (const a of activities) {
     appTotals[a.app_name] = (appTotals[a.app_name] ?? 0) + (a.duration_s ?? 0);
   }
-  const sorted = Object.entries(appTotals).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const sorted = Object.entries(appTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const totalSecs = sorted.reduce((sum, [, s]) => sum + s, 0) || 1;
 
   return (

@@ -2,7 +2,12 @@ import { useActivityStore } from '../../stores/useActivityStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 import { formatDuration } from '../../lib/utils';
 
-export function ProjectList() {
+interface ProjectListProps {
+  selectedProjectId?: number | null;
+  onSelectProject?: (projectId: number) => void;
+}
+
+export function ProjectList({ selectedProjectId = null, onSelectProject }: ProjectListProps) {
   const activities = useActivityStore((s) => s.activities);
   const projects = useProjectStore((s) => s.projects);
 
@@ -26,7 +31,13 @@ export function ProjectList() {
         </div>
       ) : (
         projectTotals.map((p) => (
-          <div key={p.id} className="project-row">
+          <button
+            key={p.id}
+            type="button"
+            className={`project-row project-row-button${selectedProjectId === p.id ? ' is-selected' : ''}`}
+            onClick={() => p.id && onSelectProject?.(p.id)}
+            title={`Highlight ${p.name} activities in the timeline`}
+          >
             <span className="project-dot" style={{ background: p.color }} />
             <span style={{ fontSize: 12.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {p.name}
@@ -40,7 +51,7 @@ export function ProjectList() {
             <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.45)', minWidth: 36, textAlign: 'right' }}>
               {formatDuration(p.secs)}
             </span>
-          </div>
+          </button>
         ))
       )}
     </div>

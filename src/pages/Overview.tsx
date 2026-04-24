@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { isToday } from 'date-fns';
 import { StatsRow } from '../components/dashboard/StatsRow';
 import { Timeline } from '../components/dashboard/Timeline';
@@ -11,6 +11,7 @@ export function Overview() {
   const fetchToday    = useActivityStore((s) => s.fetchToday);
   const fetchForDate  = useActivityStore((s) => s.fetchForDate);
   const viewDate      = useActivityStore((s) => s.viewDate);
+  const [highlightedProjectId, setHighlightedProjectId] = useState<number | null>(null);
 
   useEffect(() => {
     // On mount, always load whatever viewDate is current (today by default)
@@ -28,9 +29,14 @@ export function Overview() {
   return (
     <>
       <StatsRow />
-      <Timeline />
+      <Timeline highlightedProjectId={highlightedProjectId} />
       <div className="mid-row">
-        <ProjectList />
+        <ProjectList
+          selectedProjectId={highlightedProjectId}
+          onSelectProject={(projectId) => {
+            setHighlightedProjectId((current) => current === projectId ? null : projectId);
+          }}
+        />
         <AppBreakdown />
       </div>
       <ActivityFeed />

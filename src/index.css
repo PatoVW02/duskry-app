@@ -288,6 +288,32 @@ html, body, #root, #root * {
 }
 .project-row:last-child { border-bottom: none; }
 
+.project-row-button {
+  appearance: none;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  cursor: pointer;
+  transition: background 0.14s, box-shadow 0.14s, padding 0.14s;
+}
+
+.project-row-button:hover,
+.project-row-button.is-selected {
+  padding-left: 8px;
+  padding-right: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border-radius: 7px;
+}
+
+.project-row-button.is-selected {
+  box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.22);
+}
+
 .project-page-row {
   transition: background 0.12s, border-color 0.12s;
 }
