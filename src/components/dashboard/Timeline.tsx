@@ -102,11 +102,22 @@ export function Timeline() {
           const width = Math.max(0.15, ((a.duration_s ?? 0) / totalSecs) * 100);
           const proj  = projects.find((p) => p.id === a.project_id);
           const color = proj?.color ?? 'rgba(255,255,255,0.25)';
+          const isHovered = hovered?.id === a.id;
           return (
             <div
               key={a.id}
               className="tl-block"
-              style={{ left: `${left}%`, width: `${width}%`, background: color }}
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                background: color,
+                opacity: hovered && !isHovered ? 0.38 : 1,
+                zIndex: isHovered ? 4 : 1,
+                outline: isHovered ? '2px solid rgba(255,255,255,0.85)' : 'none',
+                outlineOffset: 1,
+                boxShadow: isHovered ? '0 0 0 4px rgba(45,212,191,0.18), 0 8px 22px rgba(0,0,0,0.28)' : undefined,
+                transform: isHovered ? 'scaleY(1.35)' : undefined,
+              }}
               onMouseEnter={(e) => { setHovered(a); setTipPos({ x: e.clientX, y: e.clientY }); }}
               onMouseMove={(e) => setTipPos({ x: e.clientX, y: e.clientY })}
               onMouseLeave={() => setHovered(null)}

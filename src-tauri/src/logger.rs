@@ -1,3 +1,5 @@
+use chrono::Local;
+use once_cell::sync::Lazy;
 /// Simple append-only tracker log.
 ///
 /// Log file location: `{data_dir}/duskry/tracker.log`
@@ -8,10 +10,8 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use once_cell::sync::Lazy;
-use chrono::Local;
 
-const MAX_BYTES: u64    = 200_000;
+const MAX_BYTES: u64 = 200_000;
 const KEEP_LINES: usize = 2_000;
 
 fn log_path() -> PathBuf {
@@ -28,7 +28,7 @@ fn log_path() -> PathBuf {
 /// Write a timestamped line to the tracker log.
 pub fn tlog(msg: &str) {
     let path = log_path();
-    let ts   = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let line = format!("[{}] {}\n", ts, msg);
 
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
@@ -44,7 +44,9 @@ pub fn tlog(msg: &str) {
 }
 
 fn rotate(path: &std::path::Path) {
-    let Ok(content) = std::fs::read_to_string(path) else { return };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
     let lines: Vec<&str> = content.lines().collect();
     if lines.len() > KEEP_LINES {
         let trimmed = lines[lines.len() - KEEP_LINES..].join("\n") + "\n";
@@ -55,7 +57,9 @@ fn rotate(path: &std::path::Path) {
 /// Return the last `n` lines of the log (most recent at the end).
 pub fn get_log_lines(n: usize) -> Vec<String> {
     let path = log_path();
-    let Ok(content) = std::fs::read_to_string(&path) else { return vec![] };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return vec![];
+    };
     let all: Vec<&str> = content.lines().collect();
     let start = all.len().saturating_sub(n);
     all[start..].iter().map(|s| s.to_string()).collect()

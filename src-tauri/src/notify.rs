@@ -2,14 +2,15 @@
 pub fn send_notification(title: &str, body: &str) {
     #[cfg(target_os = "macos")]
     {
-        let safe_body  = body.replace('\\', "\\\\").replace('"', "\\\"");
+        let safe_body = body.replace('\\', "\\\\").replace('"', "\\\"");
         let safe_title = title.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
             r#"display notification "{}" with title "{}" sound name "default""#,
             safe_body, safe_title,
         );
         let _ = std::process::Command::new("osascript")
-            .arg("-e").arg(&script)
+            .arg("-e")
+            .arg(&script)
             .spawn();
     }
     #[cfg(target_os = "windows")]

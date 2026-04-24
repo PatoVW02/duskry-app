@@ -1,11 +1,11 @@
 mod db;
-mod tracker;
-mod rules;
 mod license;
-mod permissions;
-mod notify;
-mod tray;
 mod logger;
+mod notify;
+mod permissions;
+mod rules;
+mod tracker;
+mod tray;
 
 use tauri::Manager;
 
@@ -60,7 +60,10 @@ fn get_activities_for_date(from_ts: i64, to_ts: i64) -> Result<Vec<db::Activity>
 }
 
 #[tauri::command]
-fn assign_activity(activity_id: i64, project_id: i64) -> Result<Option<db::RuleSuggestion>, String> {
+fn assign_activity(
+    activity_id: i64,
+    project_id: i64,
+) -> Result<Option<db::RuleSuggestion>, String> {
     let previous = db::get_activity(activity_id).ok();
     db::assign_activity(activity_id, project_id, "manual").map_err(|e| e.to_string())?;
     let activity = db::get_activity(activity_id).map_err(|e| e.to_string())?;
@@ -80,7 +83,8 @@ fn assign_activity(activity_id: i64, project_id: i64) -> Result<Option<db::RuleS
         return Ok(None);
     }
 
-    let suggestion = db::get_rule_suggestion_for_activity(activity_id, 3).map_err(|e| e.to_string())?;
+    let suggestion =
+        db::get_rule_suggestion_for_activity(activity_id, 3).map_err(|e| e.to_string())?;
     let auto_create = db::get_setting("auto_create_suggested_rules_enabled")
         .map(|v| v == "true")
         .unwrap_or(false);
@@ -136,8 +140,8 @@ fn apply_rule_to_activities(rule_id: i64, from_ts: i64, to_ts: i64) -> Result<i3
         .iter()
         .find(|r| r.id == Some(rule_id))
         .ok_or_else(|| format!("Rule {} not found", rule_id))?;
-    let activities = db::get_unassigned_activities_in_range(from_ts, to_ts)
-        .map_err(|e| e.to_string())?;
+    let activities =
+        db::get_unassigned_activities_in_range(from_ts, to_ts).map_err(|e| e.to_string())?;
     let mut count = 0i32;
     for activity in &activities {
         let window = tracker::ActiveWindow {
@@ -189,7 +193,13 @@ fn get_rules() -> Result<Vec<db::Rule>, String> {
 }
 
 #[tauri::command]
-fn create_rule(project_id: i64, field: String, operator: String, value: String, priority: i32) -> Result<i64, String> {
+fn create_rule(
+    project_id: i64,
+    field: String,
+    operator: String,
+    value: String,
+    priority: i32,
+) -> Result<i64, String> {
     db::create_rule(project_id, &field, &operator, &value, priority).map_err(|e| e.to_string())
 }
 
@@ -212,8 +222,14 @@ fn create_suggested_rule(
 ) -> Result<i64, String> {
     let compound_value = suggested_rule_value(&field, &operator, &value);
     let (stored_field, stored_operator) = suggested_rule_storage(&field, &operator);
-    let rule_id = db::create_rule(project_id, stored_field, stored_operator, &compound_value, 10)
-        .map_err(|e| e.to_string())?;
+    let rule_id = db::create_rule(
+        project_id,
+        stored_field,
+        stored_operator,
+        &compound_value,
+        10,
+    )
+    .map_err(|e| e.to_string())?;
     db::mark_rule_suggestion_created(project_id, &field, &operator, &value)
         .map_err(|e| e.to_string())?;
     Ok(rule_id)
@@ -231,7 +247,8 @@ fn suggested_rule_value(field: &str, operator: &str, value: &str) -> String {
             "value": value,
             "negated": false
         }]
-    }).to_string()
+    })
+    .to_string()
 }
 
 fn suggested_rule_storage<'a>(field: &'a str, operator: &'a str) -> (&'a str, &'a str) {
@@ -249,8 +266,7 @@ fn dismiss_rule_suggestion(
     operator: String,
     value: String,
 ) -> Result<(), String> {
-    db::dismiss_rule_suggestion(project_id, &field, &operator, &value)
-        .map_err(|e| e.to_string())
+    db::dismiss_rule_suggestion(project_id, &field, &operator, &value).map_err(|e| e.to_string())
 }
 
 // ─── Settings commands ──────────────────────────────────────────────────────
@@ -281,7 +297,11 @@ async fn validate_license(key: String) -> Result<String, String> {
 #[tauri::command]
 fn start_trial(email: String, expires_at: i64) -> Result<(), String> {
     db::set_setting("trial_email", &email).map_err(|e| e.to_string())?;
-    db::set_setting("trial_started_at", &chrono::Utc::now().timestamp().to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(
+        "trial_started_at",
+        &chrono::Utc::now().timestamp().to_string(),
+    )
+    .map_err(|e| e.to_string())?;
     db::set_setting("trial_expires_at", &expires_at.to_string()).map_err(|e| e.to_string())?;
     db::set_setting("trial_status", "active").map_err(|e| e.to_string())
 }
@@ -364,7 +384,8 @@ fn set_rules_override(enabled: bool) -> Result<(), String> {
     db::set_setting(
         "rules_override_active_project",
         if enabled { "true" } else { "false" },
-    ).map_err(|e| e.to_string())
+    )
+    .map_err(|e| e.to_string())
 }
 
 // ─── Notifications ───────────────────────────────────────────────────────────
@@ -386,17 +407,39 @@ fn get_notifications_enabled() -> bool {
 // ─── URL opener ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn open_url(url: String) {
+fn open_url(url: String) -> Result<(), String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return Err("Only http and https URLs can be opened".to_string());
+    }
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(&url).spawn();
+    std::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/c", "start", &url]).spawn();
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ─── File export ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn save_file(content: String, filename: String) -> Result<String, String> {
+    let filename = filename.trim();
+    if filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+    {
+        return Err("Invalid export filename".to_string());
+    }
+
     #[cfg(target_os = "macos")]
     let dir = {
         let home = std::env::var("HOME").map_err(|e| e.to_string())?;
@@ -413,9 +456,14 @@ fn save_file(content: String, filename: String) -> Result<String, String> {
     let path = format!("{}/{}", dir, filename);
     std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+    let _ = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").args(["/select,", &path]).spawn();
+    let _ = std::process::Command::new("explorer")
+        .args(["/select,", &path])
+        .spawn();
     Ok(path)
 }
 
@@ -432,14 +480,12 @@ pub fn run() {
             let active_pid = db::get_setting("active_project_id")
                 .and_then(|v| v.parse::<i64>().ok())
                 .unwrap_or(0);
-            tracker::ACTIVE_PROJECT_ID
-                .store(active_pid, std::sync::atomic::Ordering::SeqCst);
+            tracker::ACTIVE_PROJECT_ID.store(active_pid, std::sync::atomic::Ordering::SeqCst);
 
             let paused = db::get_setting("tracking_paused")
                 .map(|v| v == "true")
                 .unwrap_or(false);
-            tracker::TRACKING_PAUSED
-                .store(paused, std::sync::atomic::Ordering::SeqCst);
+            tracker::TRACKING_PAUSED.store(paused, std::sync::atomic::Ordering::SeqCst);
 
             let onboarding_complete = db::get_setting("onboarding_complete")
                 .map(|v| v == "true")
@@ -518,7 +564,11 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
                 if !has_visible_windows {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.show();

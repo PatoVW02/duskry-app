@@ -1,6 +1,6 @@
-use tauri::{AppHandle, Manager};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, CheckMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager};
 
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
@@ -25,16 +25,16 @@ pub fn rebuild_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let projects   = crate::db::get_all_projects().unwrap_or_default();
-    let active_id  = crate::db::get_setting("active_project_id")
+    let projects = crate::db::get_all_projects().unwrap_or_default();
+    let active_id = crate::db::get_setting("active_project_id")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
-    let paused = crate::tracker::TRACKING_PAUSED
-        .load(std::sync::atomic::Ordering::SeqCst);
+    let paused = crate::tracker::TRACKING_PAUSED.load(std::sync::atomic::Ordering::SeqCst);
 
     // ── Focus label (non-clickable header) ───────────────────────
     let focus_label = if active_id > 0 {
-        let name = projects.iter()
+        let name = projects
+            .iter()
             .find(|p| p.id == Some(active_id))
             .map(|p| p.name.as_str())
             .unwrap_or("Unknown");
@@ -42,13 +42,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     } else {
         "Focus: None".to_string()
     };
-    let focus_item  = MenuItem::with_id(app, "focus_label", &focus_label, false, None::<&str>)?;
-    let sep1        = PredefinedMenuItem::separator(app)?;
+    let focus_item = MenuItem::with_id(app, "focus_label", &focus_label, false, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
 
     // ── Per-project check items ───────────────────────────────────
     let mut project_items: Vec<CheckMenuItem<tauri::Wry>> = Vec::new();
     for p in &projects {
-        let pid = match p.id { Some(id) if id > 0 => id, _ => continue };
+        let pid = match p.id {
+            Some(id) if id > 0 => id,
+            _ => continue,
+        };
         let item = CheckMenuItem::with_id(
             app,
             &format!("project_{}", pid),
@@ -60,13 +63,23 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         project_items.push(item);
     }
 
-    let clear        = MenuItem::with_id(app, "clear_focus", "Clear Focus", active_id > 0, None::<&str>)?;
-    let sep2         = PredefinedMenuItem::separator(app)?;
-    let pause_label  = if paused { "Resume Tracking" } else { "Pause Tracking" };
+    let clear = MenuItem::with_id(
+        app,
+        "clear_focus",
+        "Clear Focus",
+        active_id > 0,
+        None::<&str>,
+    )?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let pause_label = if paused {
+        "Resume Tracking"
+    } else {
+        "Pause Tracking"
+    };
     let toggle_pause = MenuItem::with_id(app, "toggle_pause", pause_label, true, None::<&str>)?;
-    let sep3         = PredefinedMenuItem::separator(app)?;
-    let open         = MenuItem::with_id(app, "open", "Open Duskry", true, None::<&str>)?;
-    let quit         = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
+    let open = MenuItem::with_id(app, "open", "Open Duskry", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     // ── Assemble ──────────────────────────────────────────────────
     let menu = Menu::new(app)?;
@@ -94,20 +107,15 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             }
         }
         "toggle_pause" => {
-            let current = crate::tracker::TRACKING_PAUSED
-                .load(std::sync::atomic::Ordering::SeqCst);
+            let current = crate::tracker::TRACKING_PAUSED.load(std::sync::atomic::Ordering::SeqCst);
             let new_val = !current;
-            crate::tracker::TRACKING_PAUSED
-                .store(new_val, std::sync::atomic::Ordering::SeqCst);
-            let _ = crate::db::set_setting(
-                "tracking_paused",
-                if new_val { "true" } else { "false" },
-            );
+            crate::tracker::TRACKING_PAUSED.store(new_val, std::sync::atomic::Ordering::SeqCst);
+            let _ =
+                crate::db::set_setting("tracking_paused", if new_val { "true" } else { "false" });
             let _ = rebuild_tray(app);
         }
         "clear_focus" => {
-            crate::tracker::ACTIVE_PROJECT_ID
-                .store(0, std::sync::atomic::Ordering::SeqCst);
+            crate::tracker::ACTIVE_PROJECT_ID.store(0, std::sync::atomic::Ordering::SeqCst);
             let _ = crate::db::set_setting("active_project_id", "0");
             let _ = rebuild_tray(app);
         }

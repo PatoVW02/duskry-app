@@ -1,9 +1,9 @@
-use rusqlite::{Connection, Result, params};
-use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
 use dirs::data_dir;
+use once_cell::sync::Lazy;
+use rusqlite::{params, Connection, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 static DB: Lazy<Mutex<Connection>> = Lazy::new(|| {
     let path = get_db_path();
@@ -21,7 +21,8 @@ fn get_db_path() -> PathBuf {
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {
-    conn.execute_batch(r#"
+    conn.execute_batch(
+        r#"
         CREATE TABLE IF NOT EXISTS activities (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             app_name     TEXT NOT NULL,
@@ -102,7 +103,8 @@ fn init_schema(conn: &Connection) -> Result<()> {
         INSERT OR IGNORE INTO settings VALUES ('scene_auto',           'true');
         INSERT OR IGNORE INTO settings VALUES ('auto_rule_suggestions_enabled', 'true');
         INSERT OR IGNORE INTO settings VALUES ('auto_create_suggested_rules_enabled', 'false');
-    "#)?;
+    "#,
+    )?;
     ensure_column(
         conn,
         "rule_learning_signals",
@@ -130,7 +132,8 @@ pub fn get_setting(key: &str) -> Option<String> {
         "SELECT value FROM settings WHERE key = ?1",
         params![key],
         |row| row.get(0),
-    ).ok()
+    )
+    .ok()
 }
 
 pub fn set_setting(key: &str, value: &str) -> Result<()> {
@@ -198,11 +201,13 @@ pub fn save_activity_start(app_name: &str, window_title: &str, started_at: i64) 
 
 pub fn finish_activity(id: i64, ended_at: i64) -> Result<()> {
     let conn = DB.lock().expect("db lock");
-    let duration = conn.query_row(
-        "SELECT started_at FROM activities WHERE id = ?1",
-        params![id],
-        |row| row.get::<_, i64>(0),
-    ).unwrap_or(ended_at);
+    let duration = conn
+        .query_row(
+            "SELECT started_at FROM activities WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(ended_at);
     conn.execute(
         "UPDATE activities SET ended_at = ?1, duration_s = ?2 WHERE id = ?3",
         params![ended_at, ended_at - duration, id],
@@ -215,7 +220,13 @@ pub fn get_today_activities() -> Result<Vec<Activity>> {
     let today_start = {
         use chrono::{Local, Timelike};
         let now = Local::now();
-        let midnight = now.with_hour(0).unwrap().with_minute(0).unwrap().with_second(0).unwrap();
+        let midnight = now
+            .with_hour(0)
+            .unwrap()
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap();
         midnight.timestamp()
     };
     get_activities_in_range_conn(&conn, today_start, i64::MAX)
@@ -226,8 +237,13 @@ pub fn get_activities_in_range(from_ts: i64, to_ts: i64) -> Result<Vec<Activity>
     get_activities_in_range_conn(&conn, from_ts, to_ts)
 }
 
-fn get_activities_in_range_conn(conn: &Connection, from_ts: i64, to_ts: i64) -> Result<Vec<Activity>> {
-    let mut stmt = conn.prepare(r#"
+fn get_activities_in_range_conn(
+    conn: &Connection,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<Activity>> {
+    let mut stmt = conn.prepare(
+        r#"
         SELECT a.id, a.app_name, a.window_title, a.file_path, a.domain,
                a.started_at, a.ended_at,
                COALESCE(a.duration_s,
@@ -239,7 +255,8 @@ fn get_activities_in_range_conn(conn: &Connection, from_ts: i64, to_ts: i64) -> 
         LEFT JOIN assignments ass ON ass.activity_id = a.id
         WHERE a.started_at >= ?1 AND a.started_at <= ?2
         ORDER BY a.started_at DESC
-    "#)?;
+    "#,
+    )?;
     let rows = stmt.query_map(params![from_ts, to_ts], |row| {
         Ok(Activity {
             id: row.get(0)?,
@@ -268,7 +285,8 @@ pub fn assign_activity(activity_id: i64, project_id: i64, source: &str) -> Resul
 
 pub fn get_activity(activity_id: i64) -> Result<Activity> {
     let conn = DB.lock().expect("db lock");
-    conn.query_row(r#"
+    conn.query_row(
+        r#"
         SELECT a.id, a.app_name, a.window_title, a.file_path, a.domain,
                a.started_at, a.ended_at,
                COALESCE(a.duration_s,
@@ -279,44 +297,61 @@ pub fn get_activity(activity_id: i64) -> Result<Activity> {
         FROM activities a
         LEFT JOIN assignments ass ON ass.activity_id = a.id
         WHERE a.id = ?1
-    "#, params![activity_id], |row| {
-        Ok(Activity {
-            id: row.get(0)?,
-            app_name: row.get(1)?,
-            window_title: row.get(2)?,
-            file_path: row.get(3)?,
-            domain: row.get(4)?,
-            started_at: row.get(5)?,
-            ended_at: row.get(6)?,
-            duration_s: row.get(7)?,
-            project_id: row.get(8)?,
-            source: row.get(9)?,
-        })
-    })
+    "#,
+        params![activity_id],
+        |row| {
+            Ok(Activity {
+                id: row.get(0)?,
+                app_name: row.get(1)?,
+                window_title: row.get(2)?,
+                file_path: row.get(3)?,
+                domain: row.get(4)?,
+                started_at: row.get(5)?,
+                ended_at: row.get(6)?,
+                duration_s: row.get(7)?,
+                project_id: row.get(8)?,
+                source: row.get(9)?,
+            })
+        },
+    )
 }
 
 pub fn record_assignment_learning(activity: &Activity, project_id: i64) -> Result<()> {
     let conn = DB.lock().expect("db lock");
     let now = chrono::Utc::now().timestamp();
     if let Some(activity_id) = activity.id {
-        conn.execute(r#"
+        conn.execute(
+            r#"
             INSERT OR REPLACE INTO rule_learning_events
                 (activity_id, project_id, app_name, window_title, domain, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-        "#, params![
-            activity_id,
-            project_id,
-            activity.app_name.trim(),
-            activity.window_title.as_deref().map(str::trim).filter(|v| !v.is_empty()),
-            activity.domain.as_deref().map(str::trim).filter(|v| !v.is_empty()),
-            now,
-        ])?;
+        "#,
+            params![
+                activity_id,
+                project_id,
+                activity.app_name.trim(),
+                activity
+                    .window_title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty()),
+                activity
+                    .domain
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty()),
+                now,
+            ],
+        )?;
     }
 
-    let mut candidates = vec![
-        ("app", "equals", activity.app_name.trim()),
-    ];
-    if let Some(domain) = activity.domain.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+    let mut candidates = vec![("app", "equals", activity.app_name.trim())];
+    if let Some(domain) = activity
+        .domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
         candidates.push(("url", "contains", domain));
     }
 
@@ -324,19 +359,25 @@ pub fn record_assignment_learning(activity: &Activity, project_id: i64) -> Resul
         if value.is_empty() {
             continue;
         }
-        conn.execute(r#"
+        conn.execute(
+            r#"
             INSERT INTO rule_learning_signals
                 (project_id, field, operator, value, count, dismissed, created, updated_at)
             VALUES (?1, ?2, ?3, ?4, 1, 0, 0, ?5)
             ON CONFLICT(project_id, field, operator, value) DO UPDATE SET
                 count = count + 1,
                 updated_at = excluded.updated_at
-        "#, params![project_id, field, operator, value, now])?;
+        "#,
+            params![project_id, field, operator, value, now],
+        )?;
     }
     Ok(())
 }
 
-pub fn get_rule_suggestion_for_activity(activity_id: i64, threshold: i64) -> Result<Option<RuleSuggestion>> {
+pub fn get_rule_suggestion_for_activity(
+    activity_id: i64,
+    threshold: i64,
+) -> Result<Option<RuleSuggestion>> {
     let activity = get_activity(activity_id)?;
     let Some(project_id) = activity.project_id else {
         return Ok(None);
@@ -350,7 +391,12 @@ pub fn get_rule_suggestion_for_activity(activity_id: i64, threshold: i64) -> Res
     )?;
 
     let mut candidates = build_rich_rule_candidates(&conn, &activity, project_id, threshold)?;
-    if let Some(domain) = activity.domain.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+    if let Some(domain) = activity
+        .domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
         candidates.push((
             "url".to_string(),
             "contains".to_string(),
@@ -370,7 +416,9 @@ pub fn get_rule_suggestion_for_activity(activity_id: i64, threshold: i64) -> Res
         if suggestion_is_too_broad(&field, count) {
             continue;
         }
-        let can_prompt = conn.query_row(r#"
+        let can_prompt = conn
+            .query_row(
+                r#"
             SELECT 1
             FROM rule_learning_signals l
             WHERE l.project_id = ?1
@@ -388,11 +436,16 @@ pub fn get_rule_suggestion_for_activity(activity_id: i64, threshold: i64) -> Res
                     AND r.operator = l.operator
                     AND lower(r.value) = lower(l.value)
               )
-        "#, params![project_id, field, operator, value, threshold], |_| Ok(()))
-        .is_ok();
+        "#,
+                params![project_id, field, operator, value, threshold],
+                |_| Ok(()),
+            )
+            .is_ok();
 
         if can_prompt {
-            mark_rule_suggestion_prompted_conn(&conn, project_id, &field, &operator, &value, count)?;
+            mark_rule_suggestion_prompted_conn(
+                &conn, project_id, &field, &operator, &value, count,
+            )?;
             return Ok(Some(RuleSuggestion {
                 project_id,
                 project_name: project.0,
@@ -425,7 +478,8 @@ fn build_rich_rule_candidates(
     }
 
     let mut candidates = Vec::new();
-    let mut stmt = conn.prepare(r#"
+    let mut stmt = conn.prepare(
+        r#"
         SELECT domain, COUNT(*) AS c
         FROM rule_learning_events
         WHERE project_id = ?1
@@ -435,20 +489,24 @@ fn build_rich_rule_candidates(
         GROUP BY domain
         ORDER BY c DESC, max(updated_at) DESC
         LIMIT 4
-    "#)?;
+    "#,
+    )?;
     let rows = stmt.query_map(params![project_id, app_name], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
     })?;
     let domains = rows.collect::<Result<Vec<_>>>()?;
     let domain_total: i64 = domains.iter().map(|(_, count)| *count).sum();
     if domain_total >= threshold && !domains.is_empty() {
-        let domain_nodes: Vec<serde_json::Value> = domains.iter()
-            .map(|(domain, _)| serde_json::json!({
-                "field": "url",
-                "operator": "contains",
-                "value": domain,
-                "negated": false
-            }))
+        let domain_nodes: Vec<serde_json::Value> = domains
+            .iter()
+            .map(|(domain, _)| {
+                serde_json::json!({
+                    "field": "url",
+                    "operator": "contains",
+                    "value": domain,
+                    "negated": false
+                })
+            })
             .collect();
         let value = serde_json::json!({
             "combinator": "and",
@@ -464,9 +522,18 @@ fn build_rich_rule_candidates(
                     "conditions": domain_nodes
                 }
             ]
-        }).to_string();
-        upsert_learning_signal_count(conn, project_id, "compound", "matches", &value, domain_total)?;
-        let joined = domains.iter()
+        })
+        .to_string();
+        upsert_learning_signal_count(
+            conn,
+            project_id,
+            "compound",
+            "matches",
+            &value,
+            domain_total,
+        )?;
+        let joined = domains
+            .iter()
             .map(|(domain, _)| format!("domain contains \"{}\"", domain))
             .collect::<Vec<_>>()
             .join(" OR ");
@@ -481,7 +548,13 @@ fn build_rich_rule_candidates(
     Ok(candidates)
 }
 
-fn signal_count(conn: &Connection, project_id: i64, field: &str, operator: &str, value: &str) -> Result<i64> {
+fn signal_count(
+    conn: &Connection,
+    project_id: i64,
+    field: &str,
+    operator: &str,
+    value: &str,
+) -> Result<i64> {
     conn.query_row(
         "SELECT count FROM rule_learning_signals WHERE project_id = ?1 AND field = ?2 AND operator = ?3 AND value = ?4",
         params![project_id, field, operator, value],
@@ -524,7 +597,12 @@ fn mark_rule_suggestion_prompted_conn(
     Ok(())
 }
 
-pub fn dismiss_rule_suggestion(project_id: i64, field: &str, operator: &str, value: &str) -> Result<()> {
+pub fn dismiss_rule_suggestion(
+    project_id: i64,
+    field: &str,
+    operator: &str,
+    value: &str,
+) -> Result<()> {
     let conn = DB.lock().expect("db lock");
     conn.execute(
         "UPDATE rule_learning_signals SET dismissed = 1 WHERE project_id = ?1 AND field = ?2 AND operator = ?3 AND value = ?4",
@@ -533,7 +611,12 @@ pub fn dismiss_rule_suggestion(project_id: i64, field: &str, operator: &str, val
     Ok(())
 }
 
-pub fn mark_rule_suggestion_created(project_id: i64, field: &str, operator: &str, value: &str) -> Result<()> {
+pub fn mark_rule_suggestion_created(
+    project_id: i64,
+    field: &str,
+    operator: &str,
+    value: &str,
+) -> Result<()> {
     let conn = DB.lock().expect("db lock");
     conn.execute(
         "UPDATE rule_learning_signals SET created = 1 WHERE project_id = ?1 AND field = ?2 AND operator = ?3 AND value = ?4",
@@ -544,9 +627,8 @@ pub fn mark_rule_suggestion_created(project_id: i64, field: &str, operator: &str
 
 pub fn get_all_projects() -> Result<Vec<Project>> {
     let conn = DB.lock().expect("db lock");
-    let mut stmt = conn.prepare(
-        "SELECT id, name, color, icon, created_at FROM projects ORDER BY name"
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, name, color, icon, created_at FROM projects ORDER BY name")?;
     let rows = stmt.query_map([], |row| {
         Ok(Project {
             id: row.get(0)?,
@@ -572,7 +654,7 @@ pub fn create_project(name: &str, color: &str) -> Result<i64> {
 pub fn get_all_rules() -> Result<Vec<Rule>> {
     let conn = DB.lock().expect("db lock");
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, field, operator, value, priority FROM rules ORDER BY priority DESC"
+        "SELECT id, project_id, field, operator, value, priority FROM rules ORDER BY priority DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(Rule {
@@ -587,7 +669,13 @@ pub fn get_all_rules() -> Result<Vec<Rule>> {
     rows.collect()
 }
 
-pub fn create_rule(project_id: i64, field: &str, operator: &str, value: &str, priority: i32) -> Result<i64> {
+pub fn create_rule(
+    project_id: i64,
+    field: &str,
+    operator: &str,
+    value: &str,
+    priority: i32,
+) -> Result<i64> {
     let conn = DB.lock().expect("db lock");
     conn.execute(
         "INSERT INTO rules (project_id, field, operator, value, priority) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -670,14 +758,16 @@ pub fn create_manual_activity(
 
 pub fn get_unassigned_activities_in_range(from_ts: i64, to_ts: i64) -> Result<Vec<Activity>> {
     let conn = DB.lock().expect("db lock");
-    let mut stmt = conn.prepare(r#"
+    let mut stmt = conn.prepare(
+        r#"
         SELECT a.id, a.app_name, a.window_title, a.file_path, a.domain,
                a.started_at, a.ended_at, a.duration_s
         FROM activities a
         LEFT JOIN assignments ass ON ass.activity_id = a.id
         WHERE a.started_at >= ?1 AND a.started_at <= ?2
           AND ass.activity_id IS NULL
-    "#)?;
+    "#,
+    )?;
     let rows = stmt.query_map(params![from_ts, to_ts], |row| {
         Ok(Activity {
             id: row.get(0)?,
@@ -699,7 +789,13 @@ pub fn assign_all_unassigned_today(project_id: i64) -> Result<i32> {
     use chrono::{Local, Timelike};
     let today_start = {
         let now = Local::now();
-        let midnight = now.with_hour(0).unwrap().with_minute(0).unwrap().with_second(0).unwrap();
+        let midnight = now
+            .with_hour(0)
+            .unwrap()
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap();
         midnight.timestamp()
     };
     let conn = DB.lock().expect("db lock");

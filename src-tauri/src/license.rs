@@ -1,9 +1,12 @@
-use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
-use hmac::{Hmac, Mac};
-use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce,
+};
 use chrono::Utc;
 use dirs::data_dir;
+use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -23,11 +26,11 @@ pub enum AppTier {
 impl AppTier {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AppTier::Free     => "free",
+            AppTier::Free => "free",
             AppTier::ProTrial => "proTrial",
-            AppTier::Pro      => "pro",
-            AppTier::ProPlus  => "proPlus",
-            AppTier::Expired  => "expired",
+            AppTier::Pro => "pro",
+            AppTier::ProPlus => "proPlus",
+            AppTier::Expired => "expired",
         }
     }
 }
@@ -44,14 +47,14 @@ struct LicenseCache {
 pub fn get_effective_tier() -> AppTier {
     if let Some(tier) = get_valid_license_tier() {
         return match tier.as_str() {
-            "pro"     => AppTier::Pro,
+            "pro" => AppTier::Pro,
             "proplus" | "pro+" => AppTier::ProPlus,
             _ => AppTier::Pro,
         };
     }
 
-    let trial_status   = crate::db::get_setting("trial_status").unwrap_or_default();
-    let trial_expires  = crate::db::get_setting("trial_expires_at")
+    let trial_status = crate::db::get_setting("trial_status").unwrap_or_default();
+    let trial_expires = crate::db::get_setting("trial_expires_at")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
     let now = Utc::now().timestamp();
@@ -70,10 +73,16 @@ pub fn get_effective_tier() -> AppTier {
 fn get_valid_license_tier() -> Option<String> {
     let cache = read_cache()?;
     let now = Utc::now().timestamp();
-    if cache.valid_until < now { return None; }
-    if cache.machine_id != get_machine_id() { return None; }
+    if cache.valid_until < now {
+        return None;
+    }
+    if cache.machine_id != get_machine_id() {
+        return None;
+    }
     let expected = compute_hmac(&cache.key, &cache.machine_id);
-    if cache.hmac != expected { return None; }
+    if cache.hmac != expected {
+        return None;
+    }
     Some(cache.tier)
 }
 
@@ -108,8 +117,7 @@ fn hash_str(s: &str) -> String {
 }
 
 fn compute_hmac(key: &str, machine_id: &str) -> String {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(machine_id.as_bytes())
-        .expect("HMAC init");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(machine_id.as_bytes()).expect("HMAC init");
     mac.update(key.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
@@ -156,7 +164,8 @@ pub fn write_cache(key: &str, tier: &str) -> Result<(), String> {
     let nonce_bytes = b"duskry-nonce";
     let nonce = Nonce::from_slice(nonce_bytes);
     let plaintext = serde_json::to_vec(&cache).map_err(|e| e.to_string())?;
-    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
         .map_err(|e| e.to_string())?;
     std::fs::write(cache_path(), ciphertext).map_err(|e| e.to_string())
 }
@@ -201,12 +210,19 @@ pub async fn validate_license_online(license_key: &str) -> Result<AppTier, Strin
         clear_cache();
         return Err("Invalid license key".to_string());
     }
-    let product = resp["meta"]["product_name"].as_str().unwrap_or("").to_lowercase();
+    let product = resp["meta"]["product_name"]
+        .as_str()
+        .unwrap_or("")
+        .to_lowercase();
     let tier = if product.contains("pro+") || product.contains("proplus") {
         "proplus"
     } else {
         "pro"
     };
     write_cache(license_key, tier)?;
-    Ok(if tier == "proplus" { AppTier::ProPlus } else { AppTier::Pro })
+    Ok(if tier == "proplus" {
+        AppTier::ProPlus
+    } else {
+        AppTier::Pro
+    })
 }

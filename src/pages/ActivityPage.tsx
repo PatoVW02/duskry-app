@@ -934,7 +934,11 @@ export function ActivityPage() {
                 const proj   = projects.find((p) => p.id === a.project_id);
                 const color  = proj?.color ?? 'rgba(255,255,255,0.18)';
                 const isHighlighted = hoveredActivityIds?.has(a.id) ?? false;
-                const isDimmed = Boolean(hoveredActivityIds) && !isHighlighted;
+                const isTimelineHovered = hovered?.id === a.id;
+                const hasTreeHighlight = Boolean(hoveredActivityIds);
+                const hasTimelineHover = Boolean(hovered);
+                const isDimmed = (hasTreeHighlight && !isHighlighted) || (hasTimelineHover && !isTimelineHovered);
+                const isEmphasized = isHighlighted || isTimelineHovered;
 
                 return (
                   <div
@@ -944,15 +948,16 @@ export function ActivityPage() {
                     onMouseLeave={()  => setHovered(null)}
                     style={{
                       position: 'absolute', top, left: GUTTER + 6, right: 8,
-                      zIndex: isHighlighted ? 3 : 1,
-                      height, background: color, opacity: isDimmed ? 0.28 : 0.88,
+                      zIndex: isEmphasized ? 3 : 1,
+                      height, background: color, opacity: isDimmed ? 0.28 : isEmphasized ? 0.96 : 0.88,
                       borderRadius: 4, cursor: 'default', overflow: 'hidden',
                       display: 'flex', flexDirection: 'column', justifyContent: 'center',
                       padding: '0 6px',
-                      outline: isHighlighted ? '2px solid rgba(255,255,255,0.88)' : 'none',
+                      outline: isEmphasized ? '2px solid rgba(255,255,255,0.88)' : 'none',
                       outlineOffset: 1,
-                      boxShadow: isHighlighted ? '0 0 0 4px rgba(45,212,191,0.18), 0 8px 22px rgba(0,0,0,0.28)' : 'none',
-                      transition: 'opacity 0.12s, outline-color 0.12s, box-shadow 0.12s',
+                      boxShadow: isEmphasized ? '0 0 0 4px rgba(45,212,191,0.18), 0 8px 22px rgba(0,0,0,0.28)' : 'none',
+                      transform: isTimelineHovered ? 'scaleX(1.015)' : undefined,
+                      transition: 'opacity 0.12s, outline-color 0.12s, box-shadow 0.12s, transform 0.12s',
                     }}
                   >
                     {height > 20 && (
