@@ -31,7 +31,10 @@ static DISPLAY_SLEEP_PREVENTED: AtomicBool = AtomicBool::new(false);
 /// Cached idle state, updated every 2 s by a background thread.
 /// Avoids calling `ioreg` (slow subprocess) on every tracking tick.
 static IS_IDLE_CACHED: AtomicBool = AtomicBool::new(false);
-static IDLE_THRESHOLD_CACHE: AtomicI64 = AtomicI64::new(300);
+pub static IDLE_THRESHOLD_CACHE: AtomicI64 = AtomicI64::new(300);
+/// Raw HIDIdleTime in seconds, updated alongside IS_IDLE_CACHED.
+/// Used to detect input events (click / keystroke) when the value resets to ~0.
+static IDLE_SECS_CACHE: AtomicI64 = AtomicI64::new(0);
 
 fn last_window_cache() -> &'static Mutex<Option<ActiveWindow>> {
     LAST_WINDOW.get_or_init(|| Mutex::new(None))
@@ -39,9 +42,14 @@ fn last_window_cache() -> &'static Mutex<Option<ActiveWindow>> {
 
 pub fn start_tracking_loop() {
     if RUNNING.swap(true, Ordering::SeqCst) {
+        crate::logger::tlog("start_tracking_loop called but already running — skipped");
         return;
     }
-    let idle_threshold = 300i64;
+    crate::logger::tlog("Tracking loop starting");
+    // Read persisted idle threshold; default 300 s (5 min).
+    let idle_threshold = crate::db::get_setting("idle_threshold_secs")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(300);
     IDLE_THRESHOLD_CACHE.store(idle_threshold, Ordering::Relaxed);
 
     // Background thread: refreshes display-sleep-prevented (pmset) every 15 s.
@@ -57,27 +65,81 @@ pub fn start_tracking_loop() {
     std::thread::spawn(|| {
         loop {
             let threshold = IDLE_THRESHOLD_CACHE.load(Ordering::Relaxed);
-            IS_IDLE_CACHED.store(is_idle_now(threshold), Ordering::Relaxed);
+            let secs = idle_secs_now();
+            IDLE_SECS_CACHE.store(secs, Ordering::Relaxed);
+            IS_IDLE_CACHED.store(secs >= threshold, Ordering::Relaxed);
             std::thread::sleep(Duration::from_secs(2));
         }
     });
     std::thread::spawn(|| {
         let mut last: Option<ActiveWindow> = None;
         let idle_threshold = IDLE_THRESHOLD_CACHE.load(Ordering::Relaxed);
+        let mut was_idle        = false; // track transitions for resume logging
+        let mut was_paused      = false;
+        let mut last_heartbeat  = Utc::now().timestamp();
+        let mut prev_idle_secs: i64 = -1;
+        let mut tick_count:     u64 = 0;
+
+        crate::logger::tlog(&format!("Tracker thread started (idle_threshold={}s, tick=5s)", idle_threshold));
 
         loop {
             std::thread::sleep(Duration::from_secs(5));
 
             // ── Pause check ──────────────────────────────────────────
             if TRACKING_PAUSED.load(Ordering::SeqCst) {
+                if !was_paused {
+                    was_paused = true;
+                    crate::logger::tlog("Tracking paused manually");
+                }
                 let prev_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
                 if prev_id > 0 {
                     let now = Utc::now().timestamp();
                     let _ = crate::db::finish_activity(prev_id, now);
+                    crate::logger::tlog(&format!("  Finished activity #{} due to manual pause", prev_id));
                     CURRENT_ACTIVITY_ID.store(0, Ordering::SeqCst);
                     last = None;
                 }
                 continue;
+            }
+            if was_paused {
+                was_paused = false;
+                crate::logger::tlog("Tracking resumed (manual pause lifted)");
+            }
+
+            // ── Per-tick state ───────────────────────────────────────
+            tick_count += 1;
+            let idle_secs = IDLE_SECS_CACHE.load(Ordering::Relaxed);
+
+            // Input event: HIDIdleTime reset from >5 s to ≤2 s = click or keystroke
+            if prev_idle_secs > 5 && idle_secs <= 2 {
+                let act_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
+                crate::logger::tlog(&format!(
+                    "Input — idle reset {}s → {}s  (activity=#{}  window={})",
+                    prev_idle_secs, idle_secs, act_id,
+                    last.as_ref().map(|w| w.app_name.as_str()).unwrap_or("none")
+                ));
+            }
+            prev_idle_secs = idle_secs;
+
+            // ── 60 s heartbeat ───────────────────────────────────────
+            let now_ts = Utc::now().timestamp();
+            if now_ts - last_heartbeat >= 60 {
+                last_heartbeat = now_ts;
+                let act_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
+                let win_desc = last.as_ref()
+                    .map(|w| format!("{} | {}", w.app_name, w.window_title))
+                    .unwrap_or_else(|| "none".to_string());
+                if act_id > 0 {
+                    crate::logger::tlog(&format!(
+                        "♥ activity #{} active — idle={}s  [{}]",
+                        act_id, idle_secs, win_desc
+                    ));
+                } else {
+                    crate::logger::tlog(&format!(
+                        "♥ loop alive — idle={}s  no active activity",
+                        idle_secs
+                    ));
+                }
             }
 
             if IS_IDLE_CACHED.load(Ordering::Relaxed) && !is_engaged() {
@@ -85,7 +147,14 @@ pub fn start_tracking_loop() {
                     let now = Utc::now().timestamp();
                     let id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
                     if id > 0 {
-                        let _ = crate::db::finish_activity(id, now - idle_threshold);
+                        // End the activity at `now` — the idle window is counted as
+                        // part of the session (the user was still in that context).
+                        // We only stop *future* recording, not backdate the end.
+                        let _ = crate::db::finish_activity(id, now);
+                        crate::logger::tlog(&format!(
+                            "Idle >{}s — stopped activity #{} at now (was: {} | {})",
+                            idle_threshold, id, prev.app_name, prev.window_title
+                        ));
                         CURRENT_ACTIVITY_ID.store(0, Ordering::SeqCst);
                     }
                     let _ = prev;
@@ -94,14 +163,43 @@ pub fn start_tracking_loop() {
                     if let Ok(mut guard) = last_window_cache().lock() {
                         *guard = None;
                     }
+                    was_idle = true;
                 }
                 continue;
             }
+            if was_idle {
+                was_idle = false;
+                crate::logger::tlog("User active again — resuming tracking");
+            }
 
             if let Some(mut current) = get_active_window() {
+                // Electron apps (VS Code, etc.) temporarily report an empty
+                // window title when focus moves between internal panels.
+                // Suppress the flicker: if the app hasn't changed and the new
+                // title is empty while the previous title was non-empty, reuse
+                // the previous title so we don't split the activity.
+                if let Some(ref prev) = last {
+                    if current.app_name == prev.app_name
+                        && current.window_title.is_empty()
+                        && !prev.window_title.is_empty()
+                    {
+                        current.window_title = prev.window_title.clone();
+                    }
+                }
+
                 let changed = last.as_ref().map(|w| {
                     w.app_name != current.app_name || w.window_title != current.window_title
                 }).unwrap_or(true);
+
+                // Periodic same-window tick log (every 15 s) so we can see the loop
+                // is alive and what osascript is reporting even with no state changes.
+                if !changed && tick_count % 3 == 0 {
+                    crate::logger::tlog(&format!(
+                        "  tick: frontmost=\"{}\" title=\"{}\"  idle={}s  activity=#{}",
+                        current.app_name, current.window_title, idle_secs,
+                        CURRENT_ACTIVITY_ID.load(Ordering::SeqCst)
+                    ));
+                }
 
                 if changed {
                     // Only fetch the browser URL when the window actually changed —
@@ -126,11 +224,40 @@ pub fn start_tracking_loop() {
                     let prev_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
                     if prev_id > 0 {
                         let _ = crate::db::finish_activity(prev_id, now);
+                        let duration = last.as_ref().map(|w| now - w.timestamp).unwrap_or(0);
+                        crate::logger::tlog(&format!(
+                            "  Finished activity #{} ({}s)",
+                            prev_id, duration
+                        ));
                     }
+
+                    // Describe what changed: app switch vs title change
+                    match last.as_ref() {
+                        Some(prev_win) if prev_win.app_name != current.app_name => {
+                            crate::logger::tlog(&format!(
+                                "App switch: {} → {}",
+                                prev_win.app_name, current.app_name
+                            ));
+                        }
+                        Some(prev_win) => {
+                            crate::logger::tlog(&format!(
+                                "Title change in {}: \"{}\" → \"{}\"",
+                                current.app_name, prev_win.window_title, current.window_title
+                            ));
+                        }
+                        None => {}
+                    }
+                    crate::logger::tlog(&format!(
+                        "Window → {} | {}{}",
+                        current.app_name,
+                        current.window_title,
+                        current.url.as_deref().map(|u| format!(" [{}]", u)).unwrap_or_default()
+                    ));
 
                     // start new activity
                     match crate::db::save_activity_start(&current.app_name, &current.window_title, now) {
                         Ok(new_id) => {
+                            crate::logger::tlog(&format!("  Started activity #{}", new_id));
                             CURRENT_ACTIVITY_ID.store(new_id, Ordering::SeqCst);
 
                             // ── Daily focus notification ──────────────────
@@ -143,6 +270,7 @@ pub fn start_tracking_loop() {
                             if let Ok(rules) = crate::db::get_all_rules() {
                                 if let Some(pid) = determine_project(&current, &rules) {
                                     let _ = crate::db::assign_activity(new_id, pid, "rule");
+                                    crate::logger::tlog(&format!("  Auto-assigned #{} to project {}", new_id, pid));
                                 }
                             }
 
@@ -150,10 +278,17 @@ pub fn start_tracking_loop() {
                             // next tick will retry (changed=true again via last=None).
                             last = Some(current);
                         }
-                        Err(_) => {}
+                        Err(e) => {
+                            crate::logger::tlog(&format!("  DB error saving activity: {}", e));
+                        }
                     }
                 }
             } else {
+                // osascript returned None — timeout or system not ready
+                crate::logger::tlog(&format!(
+                    "  tick: osascript returned None  idle={}s  activity=#{}",
+                    idle_secs, CURRENT_ACTIVITY_ID.load(Ordering::SeqCst)
+                ));
                 // Window gone (idle handled above) — clear cache
                 if let Ok(mut guard) = last_window_cache().lock() {
                     *guard = None;
@@ -228,6 +363,7 @@ fn run_osascript(script: &str, timeout: Duration) -> Option<String> {
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait(); // reap zombie
+            crate::logger::tlog(&format!("osascript timed out (script truncated): {}...", &script[..script.len().min(80)]));
             None
         }
     }
@@ -237,10 +373,11 @@ fn run_osascript(script: &str, timeout: Duration) -> Option<String> {
 pub fn get_active_window() -> Option<ActiveWindow> {
     let result = run_osascript(r#"
 tell application "System Events"
-    set frontApp to name of first application process whose frontmost is true
+    set frontProc to first application process whose frontmost is true
+    set frontApp to name of frontProc
     set frontTitle to ""
     try
-        set frontTitle to name of front window of (first process whose frontmost is true)
+        set frontTitle to title of front window of frontProc
     end try
     return frontApp & "|" & frontTitle
 end tell
@@ -252,12 +389,45 @@ end tell
     // URL is NOT fetched here — it is fetched by the tracking loop only when
     // the window changes, keeping the hot-path osascript calls to one per tick.
 
+    let raw_title = parts.get(1).unwrap_or(&"").trim().to_string();
+    // For browsers and apps that don't expose their title via System Events,
+    // fall back to a browser-specific AppleScript to get the active tab title.
+    let window_title = if raw_title.is_empty() {
+        get_browser_title(&app_name).unwrap_or_default()
+    } else {
+        raw_title
+    };
+
     Some(ActiveWindow {
         app_name,
-        window_title: parts.get(1).unwrap_or(&"").trim().to_string(),
+        window_title,
         url: None,
         timestamp: Utc::now().timestamp(),
     })
+}
+
+#[cfg(target_os = "macos")]
+fn get_browser_title(app_name: &str) -> Option<String> {
+    let script = match app_name {
+        "Google Chrome" | "Chromium" =>
+            r#"tell application "Google Chrome" to return title of active tab of front window"#,
+        "Safari" =>
+            r#"tell application "Safari" to return name of current tab of front window"#,
+        "Microsoft Edge" =>
+            r#"tell application "Microsoft Edge" to return title of active tab of front window"#,
+        "Brave Browser" =>
+            r#"tell application "Brave Browser" to return title of active tab of front window"#,
+        "Arc" =>
+            r#"tell application "Arc" to return title of active tab of front window"#,
+        "Atlas" | "Atlas Browser" =>
+            r#"tell application "Atlas" to return title of active tab of front window"#,
+        "Orion" =>
+            r#"tell application "Orion" to return title of active tab of front window"#,
+        "ChatGPT" =>
+            r#"tell application "ChatGPT" to return title of front window"#,
+        _ => return None,
+    };
+    run_osascript(script, Duration::from_secs(2))
 }
 
 #[cfg(target_os = "macos")]
@@ -326,9 +496,9 @@ fn get_browser_url(_app_name: &str) -> Option<String> {
     None
 }
 
-/// Reads the cached HIDIdleTime from ioreg. Only called from the background watcher thread.
+/// Reads raw HIDIdleTime from ioreg and returns seconds. Only called from the background watcher thread.
 #[cfg(target_os = "macos")]
-fn is_idle_now(threshold_secs: i64) -> bool {
+fn idle_secs_now() -> i64 {
     let output = std::process::Command::new("ioreg")
         .args(["-c", "IOHIDSystem"])
         .output()
@@ -340,14 +510,18 @@ fn is_idle_now(threshold_secs: i64) -> bool {
             if let Some(eq) = rest.find('=') {
                 let num_str = rest[eq + 1..].trim().split_whitespace().next().unwrap_or("0");
                 if let Ok(ns) = num_str.trim_end_matches(|c: char| !c.is_ascii_digit()).parse::<u64>() {
-                    let secs = (ns / 1_000_000_000) as i64;
-                    return secs >= threshold_secs;
+                    return (ns / 1_000_000_000) as i64;
                 }
             }
         }
     }
-    false
+    0
 }
+
+
+
+#[cfg(not(target_os = "macos"))]
+fn idle_secs_now() -> i64 { 0 }
 
 #[cfg(not(target_os = "macos"))]
 fn is_idle_now(_threshold_secs: i64) -> bool {
@@ -395,6 +569,7 @@ fn is_engaged() -> bool {
     // 1. Cached pmset result — covers any app preventing display sleep
     //    (video players, screen share, calls) without blocking the tracking thread.
     if DISPLAY_SLEEP_PREVENTED.load(Ordering::Relaxed) {
+        crate::logger::tlog("Idle suppressed: display sleep prevented (video/screen-share/call)");
         return true;
     }
 
@@ -424,7 +599,14 @@ fn is_engaged() -> bool {
                    || title.contains("prime video") || title.contains("hbo max")
                    || title.contains("apple tv+")   || title.contains("hulu");
 
-    meeting_app || meeting_title || video_app || video_title
+    let engaged = meeting_app || meeting_title || video_app || video_title;
+    if engaged {
+        crate::logger::tlog(&format!(
+            "Idle suppressed: engaged app/title detected (app='{}' title='{}')",
+            win.app_name, win.window_title
+        ));
+    }
+    engaged
 }
 
 #[cfg(not(target_os = "macos"))]

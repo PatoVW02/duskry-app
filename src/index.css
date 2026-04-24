@@ -16,6 +16,22 @@ html, body, #root {
   overflow: hidden;
 }
 
+html, body, #root, #root * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.logs-card, .logs-card * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.logs-card .activity-row,
+.logs-card .activity-row * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* ── Glass surfaces ─────────────────────────────────── */
 .glass-card {
   background: rgba(10, 22, 18, 0.38);
@@ -107,6 +123,8 @@ html, body, #root {
 }
 
 .sidebar-logo {
+  display: flex;
+  align-items: center;
   font-size: 15px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.90);
@@ -431,6 +449,27 @@ html, body, #root {
 }
 .glass-select option { background: #1a1f2e; color: rgba(255,255,255,0.90); }
 .glass-select:focus { border-color: rgba(45, 212, 191, 0.50); }
+
+/* ── Activity tree ───────────────────────────────────────── */
+.activity-tree-row {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding-left: 0;
+  padding-right: 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  user-select: none;
+  gap: 0;
+  transition: background 0.1s;
+}
+.activity-tree-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.activity-tree-row[draggable]:active {
+  cursor: grabbing;
+  opacity: 0.7;
+}
 
 /* ── Toggle switch ────────────────────────────────────────── */
 .toggle-switch {

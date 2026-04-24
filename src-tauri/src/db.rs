@@ -77,7 +77,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
         INSERT OR IGNORE INTO settings VALUES ('trial_expires_at',     '0');
         INSERT OR IGNORE INTO settings VALUES ('trial_status',         'none');
         INSERT OR IGNORE INTO settings VALUES ('scene',                'night-mountains');
-        INSERT OR IGNORE INTO settings VALUES ('scene_auto',           'false');
+        INSERT OR IGNORE INTO settings VALUES ('scene_auto',           'true');
     "#)?;
     Ok(())
 }
@@ -175,7 +175,11 @@ pub fn get_activities_in_range(from_ts: i64, to_ts: i64) -> Result<Vec<Activity>
 fn get_activities_in_range_conn(conn: &Connection, from_ts: i64, to_ts: i64) -> Result<Vec<Activity>> {
     let mut stmt = conn.prepare(r#"
         SELECT a.id, a.app_name, a.window_title, a.file_path, a.domain,
-               a.started_at, a.ended_at, a.duration_s,
+               a.started_at, a.ended_at,
+               COALESCE(a.duration_s,
+                   CASE WHEN a.ended_at IS NULL
+                        THEN (unixepoch() - a.started_at)
+                        ELSE NULL END) AS duration_s,
                ass.project_id, ass.source
         FROM activities a
         LEFT JOIN assignments ass ON ass.activity_id = a.id

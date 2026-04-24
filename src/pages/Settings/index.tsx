@@ -4,16 +4,18 @@ import { Appearance } from './Appearance';
 import { Tracking } from './Tracking';
 import { Billing } from './Billing';
 import { Permissions } from './Permissions';
-import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle } from 'lucide-react';
+import { TrackerLog } from './TrackerLog';
+import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle, ScrollText } from 'lucide-react';
 import { useUpdaterContext } from '../../contexts/UpdaterContext';
 
-type SettingsTab = 'appearance' | 'tracking' | 'permissions' | 'billing' | 'about';
+type SettingsTab = 'appearance' | 'tracking' | 'permissions' | 'billing' | 'log' | 'about';
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: 'appearance',  label: 'Appearance',  icon: <Palette size={13} /> },
   { id: 'tracking',    label: 'Tracking',    icon: <SlidersHorizontal size={13} /> },
   { id: 'permissions', label: 'Permissions', icon: <ShieldCheck size={13} /> },
   { id: 'billing',     label: 'Billing',     icon: <CreditCard size={13} /> },
+  { id: 'log',         label: 'Tracker Log', icon: <ScrollText size={13} /> },
   { id: 'about',       label: 'About',       icon: <Info size={13} /> },
 ];
 
@@ -42,6 +44,7 @@ export function Settings() {
         {tab === 'tracking'    && <Tracking />}
         {tab === 'permissions' && <Permissions />}
         {tab === 'billing'     && <Billing />}
+        {tab === 'log'         && <TrackerLog />}
         {tab === 'about'       && <AboutTab />}
       </div>
     </div>

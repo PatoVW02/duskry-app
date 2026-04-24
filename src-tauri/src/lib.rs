@@ -5,10 +5,44 @@ mod license;
 mod permissions;
 mod notify;
 mod tray;
+mod logger;
 
 use tauri::Manager;
 
-// ─── Tracker commands ──────────────────────────────────────────────────────
+// ─── Tracker log commands ─────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_tracker_log(lines: Option<usize>) -> Vec<String> {
+    logger::get_log_lines(lines.unwrap_or(300))
+}
+
+#[tauri::command]
+fn get_tracker_log_path() -> String {
+    logger::log_path_str()
+}
+
+#[tauri::command]
+fn clear_tracker_log() {
+    logger::clear_log();
+}
+
+// ─── Idle threshold ────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_idle_threshold() -> i64 {
+    tracker::IDLE_THRESHOLD_CACHE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Update the idle threshold live (takes effect on next background-thread cycle).
+/// Persists the value so it survives restarts.
+#[tauri::command]
+fn set_idle_threshold(secs: i64) -> Result<(), String> {
+    let secs = secs.max(30); // sanity floor: never less than 30 s
+    tracker::IDLE_THRESHOLD_CACHE.store(secs, std::sync::atomic::Ordering::Relaxed);
+    db::set_setting("idle_threshold_secs", &secs.to_string()).map_err(|e| e.to_string())
+}
+
+// ─── Tracker commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn get_current_window() -> Option<tracker::ActiveWindow> {
@@ -378,6 +412,11 @@ pub fn run() {
             request_notification_permission,
             get_notifications_enabled,
             save_file,
+            get_tracker_log,
+            get_tracker_log_path,
+            clear_tracker_log,
+            get_idle_threshold,
+            set_idle_threshold,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

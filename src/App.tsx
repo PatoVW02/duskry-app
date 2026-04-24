@@ -18,7 +18,7 @@ import { FirstProjectScreen } from './components/onboarding/FirstProjectScreen';
 import { AllSetScreen } from './components/onboarding/AllSetScreen';
 
 import { Overview } from './pages/Overview';
-import { TimelinePage } from './pages/TimelinePage';
+import { ActivityPage } from './pages/ActivityPage';
 import { Projects } from './pages/Projects';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
@@ -28,15 +28,15 @@ import { useLicenseStore } from './stores/useLicenseStore';
 import { useProjectStore } from './stores/useProjectStore';
 import { useActivityStore } from './stores/useActivityStore';
 
-type Page = 'overview' | 'projects' | 'timeline' | 'reports' | 'settings';
+type Page = 'overview' | 'activity' | 'projects' | 'reports' | 'settings';
 type OnboardingStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 const PAGE_TITLES: Record<Page, string> = {
-  overview: 'Overview',
-  projects: 'Projects',
-  timeline: 'Timeline',
-  reports:  'Reports',
-  settings: 'Settings',
+  overview:  'Overview',
+  activity:  'Activity',
+  projects:  'Projects',
+  reports:   'Reports',
+  settings:  'Settings',
 };
 
 function App() {
@@ -111,7 +111,7 @@ function App() {
         <div className="main-area">
           <TopBar
             title={PAGE_TITLES[page]}
-            dateNav={page === 'overview' || page === 'timeline' ? {
+            dateNav={page === 'overview' || page === 'activity' ? {
               viewDate,
               onPrev:  () => stepDate(-1),
               onNext:  () => stepDate(1),
@@ -120,8 +120,8 @@ function App() {
           />
           <div className="page-content">
             {page === 'overview'  && <Overview />}
+            {page === 'activity'  && <ActivityPage />}
             {page === 'projects'  && <Projects />}
-            {page === 'timeline'  && <TimelinePage />}
             {page === 'reports'   && <Reports />}
             {page === 'settings'  && <Settings />}
           </div>

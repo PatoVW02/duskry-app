@@ -10,6 +10,7 @@ interface SettingsStore {
   activeProjectId: number;
   rulesOverrideActive: boolean;
   trackingPaused: boolean;
+  idleThresholdSecs: number;
   loadSettings: () => Promise<void>;
   setScene: (scene: SceneId) => Promise<void>;
   setSceneAuto: (auto: boolean) => Promise<void>;
@@ -17,15 +18,17 @@ interface SettingsStore {
   setActiveProject: (projectId: number) => Promise<void>;
   setRulesOverrideActive: (enabled: boolean) => Promise<void>;
   setTrackingPaused: (paused: boolean) => Promise<void>;
+  setIdleThreshold: (secs: number) => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsStore>((set) => ({
   scene: 'night-mountains',
-  sceneAuto: false,
+  sceneAuto: true,
   onboardingComplete: false,
   activeProjectId: 0,
   rulesOverrideActive: true,
   trackingPaused: false,
+  idleThresholdSecs: 300,
 
   loadSettings: async () => {
     try {
@@ -35,13 +38,15 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
       const activeProject = await invoke<number>('get_active_project');
       const rulesOverride = await invoke<boolean>('get_rules_override');
       const paused        = await invoke<boolean>('get_tracking_paused');
+      const idleThreshold = await invoke<number>('get_idle_threshold');
       set({
         scene: (scene ?? 'night-mountains') as SceneId,
-        sceneAuto: sceneAuto === 'true',
+        sceneAuto: sceneAuto == null ? true : sceneAuto === 'true',
         onboardingComplete: ob === 'true',
         activeProjectId: activeProject,
         rulesOverrideActive: rulesOverride,
         trackingPaused: paused,
+        idleThresholdSecs: idleThreshold,
       });
     } catch {}
   },
@@ -74,5 +79,10 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   setTrackingPaused: async (paused) => {
     await invoke('set_tracking_paused', { paused });
     set({ trackingPaused: paused });
+  },
+
+  setIdleThreshold: async (secs) => {
+    await invoke('set_idle_threshold', { secs });
+    set({ idleThresholdSecs: secs });
   },
 }));

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   startOfWeek, endOfWeek, startOfMonth, endOfMonth,
@@ -67,25 +67,47 @@ function getPrevRangeBounds(key: RangeKey): { from: Date; to: Date } {
 interface TooltipState { text: string; x: number; y: number }
 
 function ChartTooltip({ tip }: { tip: TooltipState | null }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [finalPos, setFinalPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!tip || !ref.current) { setFinalPos(null); return; }
+    const { width, height } = ref.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const margin = 8;
+    let left = tip.x + 14;
+    let top  = tip.y - 32;
+    if (left + width > vw - margin) left = tip.x - width - 14;
+    if (left < margin) left = margin;
+    if (top < margin) top = tip.y + 14;
+    if (top + height > vh - margin) top = tip.y - height - 8;
+    setFinalPos({ left, top });
+  }, [tip]);
+
   if (!tip) return null;
   return (
-    <div style={{
-      position: 'fixed',
-      left: tip.x + 14,
-      top: tip.y - 32,
-      pointerEvents: 'none',
-      zIndex: 9999,
-      background: 'rgba(8,18,14,0.93)',
-      border: '0.5px solid rgba(255,255,255,0.13)',
-      backdropFilter: 'blur(14px)',
-      WebkitBackdropFilter: 'blur(14px)',
-      borderRadius: 7,
-      padding: '5px 10px',
-      fontSize: 11.5,
-      color: 'rgba(255,255,255,0.85)',
-      whiteSpace: 'nowrap',
-      boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
-    }}>
+    <div
+      ref={ref}
+      style={{
+        position: 'fixed',
+        left: finalPos?.left ?? tip.x + 14,
+        top: finalPos?.top ?? tip.y - 32,
+        visibility: finalPos ? 'visible' : 'hidden',
+        pointerEvents: 'none',
+        zIndex: 9999,
+        background: 'rgba(8,18,14,0.93)',
+        border: '0.5px solid rgba(255,255,255,0.13)',
+        backdropFilter: 'blur(14px)',
+        WebkitBackdropFilter: 'blur(14px)',
+        borderRadius: 7,
+        padding: '5px 10px',
+        fontSize: 11.5,
+        color: 'rgba(255,255,255,0.85)',
+        whiteSpace: 'nowrap',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+      }}
+    >
       {tip.text}
     </div>
   );
@@ -437,7 +459,7 @@ export function Reports() {
           )}
         </div>
 
-        {/* Hourly pattern + Day of week */}
+        {/* Hourly pattern + Day of week + Heatmap */}
         <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 12 }}>
 
           {/* Hourly distribution */}
@@ -479,79 +501,83 @@ export function Reports() {
             </div>
           </div>
 
-          {/* Day of week */}
-          <div className="glass-card" style={{ padding: '16px 18px' }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,0.55)', marginBottom: 12 }}>
-              {isWeekly ? 'Hours by day' : 'Avg per day of week'}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 120 }}>
-              {/* Mon–Sun: getDay() indices 1–6, 0 */}
-              {[1, 2, 3, 4, 5, 6, 0].map((dow) => {
-                const secs = dowAvg[dow];
-                const pct  = (secs / maxDowAvg) * 100;
-                return (
-                  <div key={dow} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
-                    <div
-                      style={{
-                        width: '100%',
-                        height: secs > 0 ? `${Math.max(pct, 2)}%` : '2px',
-                        background: secs > 0
-                          ? 'linear-gradient(to top, rgba(251,191,36,0.80), rgba(251,191,36,0.38))'
-                          : 'rgba(255,255,255,0.04)',
-                        borderRadius: '2px 2px 0 0',
-                        transition: 'height 0.4s ease',
-                        cursor: 'default',
-                      }}
-                      onMouseEnter={(e) => showTip(e, `${DOW_LABELS[dow]}  ${secs > 0 ? formatDuration(secs) : 'No activity'}`)}
-                      onMouseMove={moveTip}
-                      onMouseLeave={hideTip}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-              {[1, 2, 3, 4, 5, 6, 0].map((dow) => (
-                <div key={dow} style={{ flex: 1, fontSize: 9, color: 'rgba(255,255,255,0.25)', textAlign: 'center' }}>
-                  {DOW_LABELS[dow].charAt(0)}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+          {/* Right column: Hours by day + Heatmap stacked */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignSelf: 'stretch' }}>
 
-        {/* Activity heatmap */}
-        <div className="glass-card" style={{ padding: '16px 18px' }}>
-          <div style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,0.55)', marginBottom: 12 }}>
-            Activity heatmap · last 12 weeks
-          </div>
-          <div style={{ display: 'flex', gap: 3 }}>
-            {heatWeeks.map((week, wi) => (
-              <div key={wi} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {week.map((cell, di) => (
-                  <div
-                    key={di}
-                    onMouseEnter={cell.date ? (e) => showTip(e, `${format(new Date(cell.date), 'EEE, MMM d')}  ${cell.secs > 0 ? formatDuration(cell.secs) : 'No activity'}`) : undefined}
-                    onMouseMove={cell.date ? moveTip : undefined}
-                    onMouseLeave={cell.date ? hideTip : undefined}
-                    style={{
-                      width: 13,
-                      height: 13,
-                      borderRadius: 2,
-                      background: cell.date ? heatColor(cell.secs) : 'transparent',
-                      cursor: cell.date ? 'default' : undefined,
-                    }}
-                  />
+            {/* Day of week */}
+            <div className="glass-card" style={{ padding: '16px 18px' }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,0.55)', marginBottom: 12 }}>
+                {isWeekly ? 'Hours by day' : 'Avg per day of week'}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 120 }}>
+                {[1, 2, 3, 4, 5, 6, 0].map((dow) => {
+                  const secs = dowAvg[dow];
+                  const pct  = (secs / maxDowAvg) * 100;
+                  return (
+                    <div key={dow} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}>
+                      <div
+                        style={{
+                          width: '100%',
+                          height: secs > 0 ? `${Math.max(pct, 2)}%` : '2px',
+                          background: secs > 0
+                            ? 'linear-gradient(to top, rgba(251,191,36,0.80), rgba(251,191,36,0.38))'
+                            : 'rgba(255,255,255,0.04)',
+                          borderRadius: '2px 2px 0 0',
+                          transition: 'height 0.4s ease',
+                          cursor: 'default',
+                        }}
+                        onMouseEnter={(e) => showTip(e, `${DOW_LABELS[dow]}  ${secs > 0 ? formatDuration(secs) : 'No activity'}`)}
+                        onMouseMove={moveTip}
+                        onMouseLeave={hideTip}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                {[1, 2, 3, 4, 5, 6, 0].map((dow) => (
+                  <div key={dow} style={{ flex: 1, fontSize: 9, color: 'rgba(255,255,255,0.25)', textAlign: 'center' }}>
+                    {DOW_LABELS[dow].charAt(0)}
+                  </div>
                 ))}
               </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 10 }}>
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', marginRight: 2 }}>Less</span>
-            {[0, 900, 1800, 7200, 14400].map((v) => (
-              <div key={v} style={{ width: 10, height: 10, borderRadius: 2, background: heatColor(v) }} />
-            ))}
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', marginLeft: 2 }}>More</span>
+            </div>
+
+            {/* Activity heatmap */}
+            <div className="glass-card" style={{ padding: '16px 18px', flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: 'rgba(255,255,255,0.55)', marginBottom: 12 }}>
+                Activity heatmap · last 12 weeks
+              </div>
+              <div style={{ display: 'flex', gap: 3, width: '100%' }}>
+                {heatWeeks.map((week, wi) => (
+                  <div key={wi} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {week.map((cell, di) => (
+                      <div
+                        key={di}
+                        onMouseEnter={cell.date ? (e) => showTip(e, `${format(new Date(cell.date), 'EEE, MMM d')}  ${cell.secs > 0 ? formatDuration(cell.secs) : 'No activity'}`) : undefined}
+                        onMouseMove={cell.date ? moveTip : undefined}
+                        onMouseLeave={cell.date ? hideTip : undefined}
+                        style={{
+                          width: '100%',
+                          aspectRatio: '1',
+                          borderRadius: 2,
+                          background: cell.date ? heatColor(cell.secs) : 'transparent',
+                          cursor: cell.date ? 'default' : undefined,
+                        }}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 10 }}>
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', marginRight: 2 }}>Less</span>
+                {[0, 900, 1800, 7200, 14400].map((v) => (
+                  <div key={v} style={{ width: 10, height: 10, borderRadius: 2, background: heatColor(v) }} />
+                ))}
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)', marginLeft: 2 }}>More</span>
+              </div>
+            </div>
+
           </div>
         </div>
 

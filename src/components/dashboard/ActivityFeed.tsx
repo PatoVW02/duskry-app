@@ -5,7 +5,7 @@ import { useActivityStore, type Activity } from '../../stores/useActivityStore';
 import { useProjectStore, type Project } from '../../stores/useProjectStore';
 import { formatDuration } from '../../lib/utils';
 import { format, fromUnixTime } from 'date-fns';
-import { Pencil, Trash2, Plus, X } from 'lucide-react';
+import { Trash2, Plus, X } from 'lucide-react';
 import { Select } from '../ui/Select';
 import { Stepper } from '../ui/Stepper';
 
@@ -19,6 +19,11 @@ function hhmmToTs(baseTs: number, hhmm: string): number {
   const d = new Date(base);
   d.setHours(h, m, 0, 0);
   return Math.floor(d.getTime() / 1000);
+}
+
+function displayAppName(name: string): string {
+  if (!name) return name;
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 // ── overlay modal shell ────────────────────────────────────────────────────
@@ -125,7 +130,7 @@ export function ActivityFeed() {
   // ── edit handlers ───────────────────────────────────────────────────────
   const openEdit = (a: Activity) => {
     setEditingActivity(a);
-    setEditTitle(a.app_name);
+    setEditTitle(displayAppName(a.app_name));
     setEditNote(a.window_title ?? '');
     setEditStart(tsToHHMM(a.started_at));
     const endTs = a.ended_at ?? (a.started_at + (a.duration_s ?? 0));
@@ -175,7 +180,7 @@ export function ActivityFeed() {
   };
 
   return (
-    <div className="glass-card" style={{ padding: '14px 18px' }}>
+    <div className="glass-card logs-card" style={{ padding: '14px 18px' }}>
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -343,18 +348,25 @@ function ActivityRow({
   const [hovered, setHovered] = useState(false);
   const proj = projects.find((p: Project) => p.id === a.project_id);
   const time = format(fromUnixTime(a.started_at), 'HH:mm');
+  const projectOptions = projects.map((p: Project) => ({ value: String(p.id!), label: p.name }));
 
   return (
     <div
       className="activity-row"
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest('[data-no-edit="true"]')) return;
+        const selection = window.getSelection()?.toString().trim();
+        if (selection) return;
+        onEdit();
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{ position: 'relative' }}
+      style={{ position: 'relative', cursor: 'pointer', userSelect: 'text', WebkitUserSelect: 'text' }}
     >
-      <div className="activity-app-icon">{a.app_name.charAt(0).toUpperCase()}</div>
+      <div className="activity-app-icon">{displayAppName(a.app_name).charAt(0).toUpperCase()}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {a.app_name}
+          {displayAppName(a.app_name)}
         </div>
         {a.window_title && (
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -363,37 +375,24 @@ function ActivityRow({
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-        {hovered && (
-          <>
-            <button
-              onClick={onEdit}
-              title="Edit"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', padding: 2, display: 'flex', alignItems: 'center' }}
-            >
-              <Pencil size={11} />
-            </button>
-            <button
-              onClick={onDelete}
-              title="Delete"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,90,90,0.50)', padding: 2, display: 'flex', alignItems: 'center' }}
-            >
-              <Trash2 size={11} />
-            </button>
-          </>
-        )}
-        {proj ? (
-          <span className="tag" style={{ background: `${proj.color}20`, color: proj.color }}>
-            {proj.name}
-          </span>
-        ) : (
+        <div data-no-edit="true" onClick={(e) => e.stopPropagation()}>
           <Select
-            value=""
+            value={a.project_id ? String(a.project_id) : ''}
             onChange={(v) => { if (v) onAssign(parseInt(v)); }}
-            options={projects.map((p: Project) => ({ value: String(p.id!), label: p.name }))}
+            options={projectOptions}
             placeholder="Assign…"
-            style={{ fontSize: 11, padding: '2px 8px', flex: 'none', minWidth: 70, borderRadius: 6 }}
+            style={{
+              fontSize: 11,
+              padding: '2px 8px',
+              flex: 'none',
+              minWidth: proj ? 92 : 70,
+              borderRadius: 999,
+              background: proj ? `${proj.color}18` : 'rgba(255, 255, 255, 0.07)',
+              border: `0.5px solid ${proj ? `${proj.color}55` : 'rgba(255, 255, 255, 0.15)'}`,
+              color: proj ? proj.color : 'rgba(255, 255, 255, 0.38)',
+            }}
           />
-        )}
+        </div>
         <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', fontVariantNumeric: 'tabular-nums' }}>
           {time}
         </span>
@@ -401,6 +400,20 @@ function ActivityRow({
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)', minWidth: 32, textAlign: 'right' }}>
             {formatDuration(a.duration_s)}
           </span>
+        )}
+        {hovered && (
+          <button
+            type="button"
+            data-no-edit="true"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            title="Delete"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,90,90,0.50)', padding: 2, display: 'flex', alignItems: 'center' }}
+          >
+            <Trash2 size={11} />
+          </button>
         )}
       </div>
     </div>
