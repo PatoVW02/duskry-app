@@ -11,7 +11,16 @@ const IDLE_OPTIONS: { label: string; value: number }[] = [
 ];
 
 export function Tracking() {
-  const { rulesOverrideActive, setRulesOverrideActive, idleThresholdSecs, setIdleThreshold } = useSettingsStore();
+  const {
+    rulesOverrideActive,
+    setRulesOverrideActive,
+    autoRuleSuggestionsEnabled,
+    setAutoRuleSuggestionsEnabled,
+    autoCreateSuggestedRulesEnabled,
+    setAutoCreateSuggestedRulesEnabled,
+    idleThresholdSecs,
+    setIdleThreshold,
+  } = useSettingsStore();
 
   return (
     <div className="glass-card" style={{ padding: '20px 24px' }}>
@@ -62,6 +71,7 @@ export function Tracking() {
         display: 'flex', alignItems: 'flex-start', gap: 16,
         paddingBottom: 16,
         borderBottom: '0.5px solid rgba(255,255,255,0.07)',
+        marginBottom: 16,
       }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
@@ -78,6 +88,51 @@ export function Tracking() {
           aria-checked={rulesOverrideActive}
           onClick={() => setRulesOverrideActive(!rulesOverrideActive)}
           className={`toggle-switch${rulesOverrideActive ? ' on' : ''}`}
+        />
+      </div>
+
+      {/* Auto rule suggestions */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 16,
+        paddingBottom: 16,
+        borderBottom: '0.5px solid rgba(255,255,255,0.07)',
+        marginBottom: 16,
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+            Suggest rules from assignments
+          </div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
+            When enabled, Duskry learns from repeated manual project assignments
+            and asks before creating a matching app or domain rule after at least 3 matches.
+          </div>
+        </div>
+        <button
+          role="switch"
+          aria-checked={autoRuleSuggestionsEnabled}
+          onClick={() => setAutoRuleSuggestionsEnabled(!autoRuleSuggestionsEnabled)}
+          className={`toggle-switch${autoRuleSuggestionsEnabled ? ' on' : ''}`}
+        />
+      </div>
+
+      {/* Auto-create suggested rules */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 16,
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+            Auto-create suggested rules
+          </div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
+            When enabled, matching app or domain rules are created automatically
+            once repeated assignments reach the suggestion threshold and the rule is specific enough.
+          </div>
+        </div>
+        <button
+          role="switch"
+          aria-checked={autoCreateSuggestedRulesEnabled}
+          onClick={() => setAutoCreateSuggestedRulesEnabled(!autoCreateSuggestedRulesEnabled)}
+          className={`toggle-switch${autoCreateSuggestedRulesEnabled ? ' on' : ''}`}
         />
       </div>
     </div>

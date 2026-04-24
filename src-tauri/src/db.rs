@@ -56,6 +56,28 @@ fn init_schema(conn: &Connection) -> Result<()> {
             source      TEXT DEFAULT 'rule'
         );
 
+        CREATE TABLE IF NOT EXISTS rule_learning_signals (
+            project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            field       TEXT NOT NULL,
+            operator    TEXT NOT NULL,
+            value       TEXT NOT NULL,
+            count       INTEGER NOT NULL DEFAULT 0,
+            dismissed   INTEGER NOT NULL DEFAULT 0,
+            created     INTEGER NOT NULL DEFAULT 0,
+            last_prompted_count INTEGER NOT NULL DEFAULT 0,
+            updated_at  INTEGER NOT NULL,
+            PRIMARY KEY (project_id, field, operator, value)
+        );
+
+        CREATE TABLE IF NOT EXISTS rule_learning_events (
+            activity_id  INTEGER PRIMARY KEY REFERENCES activities(id) ON DELETE CASCADE,
+            project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            app_name     TEXT NOT NULL,
+            window_title TEXT,
+            domain       TEXT,
+            updated_at   INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS license (
             id              INTEGER PRIMARY KEY DEFAULT 1,
             key_hash        TEXT,
@@ -78,7 +100,27 @@ fn init_schema(conn: &Connection) -> Result<()> {
         INSERT OR IGNORE INTO settings VALUES ('trial_status',         'none');
         INSERT OR IGNORE INTO settings VALUES ('scene',                'night-mountains');
         INSERT OR IGNORE INTO settings VALUES ('scene_auto',           'true');
+        INSERT OR IGNORE INTO settings VALUES ('auto_rule_suggestions_enabled', 'true');
+        INSERT OR IGNORE INTO settings VALUES ('auto_create_suggested_rules_enabled', 'false');
     "#)?;
+    ensure_column(
+        conn,
+        "rule_learning_signals",
+        "last_prompted_count",
+        "ALTER TABLE rule_learning_signals ADD COLUMN last_prompted_count INTEGER NOT NULL DEFAULT 0",
+    )?;
+    Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, alter_sql: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in rows {
+        if name? == column {
+            return Ok(());
+        }
+    }
+    conn.execute(alter_sql, [])?;
     Ok(())
 }
 
@@ -131,6 +173,18 @@ pub struct Rule {
     pub operator: String,
     pub value: String,
     pub priority: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RuleSuggestion {
+    pub project_id: i64,
+    pub project_name: String,
+    pub project_color: String,
+    pub field: String,
+    pub operator: String,
+    pub value: String,
+    pub count: i64,
+    pub label: String,
 }
 
 pub fn save_activity_start(app_name: &str, window_title: &str, started_at: i64) -> Result<i64> {
@@ -208,6 +262,282 @@ pub fn assign_activity(activity_id: i64, project_id: i64, source: &str) -> Resul
     conn.execute(
         "INSERT OR REPLACE INTO assignments (activity_id, project_id, source) VALUES (?1, ?2, ?3)",
         params![activity_id, project_id, source],
+    )?;
+    Ok(())
+}
+
+pub fn get_activity(activity_id: i64) -> Result<Activity> {
+    let conn = DB.lock().expect("db lock");
+    conn.query_row(r#"
+        SELECT a.id, a.app_name, a.window_title, a.file_path, a.domain,
+               a.started_at, a.ended_at,
+               COALESCE(a.duration_s,
+                   CASE WHEN a.ended_at IS NULL
+                        THEN (unixepoch() - a.started_at)
+                        ELSE NULL END) AS duration_s,
+               ass.project_id, ass.source
+        FROM activities a
+        LEFT JOIN assignments ass ON ass.activity_id = a.id
+        WHERE a.id = ?1
+    "#, params![activity_id], |row| {
+        Ok(Activity {
+            id: row.get(0)?,
+            app_name: row.get(1)?,
+            window_title: row.get(2)?,
+            file_path: row.get(3)?,
+            domain: row.get(4)?,
+            started_at: row.get(5)?,
+            ended_at: row.get(6)?,
+            duration_s: row.get(7)?,
+            project_id: row.get(8)?,
+            source: row.get(9)?,
+        })
+    })
+}
+
+pub fn record_assignment_learning(activity: &Activity, project_id: i64) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    let now = chrono::Utc::now().timestamp();
+    if let Some(activity_id) = activity.id {
+        conn.execute(r#"
+            INSERT OR REPLACE INTO rule_learning_events
+                (activity_id, project_id, app_name, window_title, domain, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "#, params![
+            activity_id,
+            project_id,
+            activity.app_name.trim(),
+            activity.window_title.as_deref().map(str::trim).filter(|v| !v.is_empty()),
+            activity.domain.as_deref().map(str::trim).filter(|v| !v.is_empty()),
+            now,
+        ])?;
+    }
+
+    let mut candidates = vec![
+        ("app", "equals", activity.app_name.trim()),
+    ];
+    if let Some(domain) = activity.domain.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        candidates.push(("url", "contains", domain));
+    }
+
+    for (field, operator, value) in candidates {
+        if value.is_empty() {
+            continue;
+        }
+        conn.execute(r#"
+            INSERT INTO rule_learning_signals
+                (project_id, field, operator, value, count, dismissed, created, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 1, 0, 0, ?5)
+            ON CONFLICT(project_id, field, operator, value) DO UPDATE SET
+                count = count + 1,
+                updated_at = excluded.updated_at
+        "#, params![project_id, field, operator, value, now])?;
+    }
+    Ok(())
+}
+
+pub fn get_rule_suggestion_for_activity(activity_id: i64, threshold: i64) -> Result<Option<RuleSuggestion>> {
+    let activity = get_activity(activity_id)?;
+    let Some(project_id) = activity.project_id else {
+        return Ok(None);
+    };
+
+    let conn = DB.lock().expect("db lock");
+    let project = conn.query_row(
+        "SELECT name, color FROM projects WHERE id = ?1",
+        params![project_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+
+    let mut candidates = build_rich_rule_candidates(&conn, &activity, project_id, threshold)?;
+    if let Some(domain) = activity.domain.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        candidates.push((
+            "url".to_string(),
+            "contains".to_string(),
+            domain.to_string(),
+            format!("domain contains \"{}\"", domain),
+        ));
+    }
+    candidates.push((
+        "app".to_string(),
+        "equals".to_string(),
+        activity.app_name.trim().to_string(),
+        format!("app equals \"{}\"", activity.app_name.trim()),
+    ));
+
+    for (field, operator, value, label) in candidates {
+        let count = signal_count(&conn, project_id, &field, &operator, &value)?;
+        if suggestion_is_too_broad(&field, count) {
+            continue;
+        }
+        let can_prompt = conn.query_row(r#"
+            SELECT 1
+            FROM rule_learning_signals l
+            WHERE l.project_id = ?1
+              AND l.field = ?2
+              AND l.operator = ?3
+              AND l.value = ?4
+              AND l.count >= ?5
+              AND l.count >= l.last_prompted_count + ?5
+              AND l.dismissed = 0
+              AND l.created = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM rules r
+                  WHERE r.project_id = l.project_id
+                    AND r.field = l.field
+                    AND r.operator = l.operator
+                    AND lower(r.value) = lower(l.value)
+              )
+        "#, params![project_id, field, operator, value, threshold], |_| Ok(()))
+        .is_ok();
+
+        if can_prompt {
+            mark_rule_suggestion_prompted_conn(&conn, project_id, &field, &operator, &value, count)?;
+            return Ok(Some(RuleSuggestion {
+                project_id,
+                project_name: project.0,
+                project_color: project.1,
+                field,
+                operator,
+                value,
+                count,
+                label,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+fn suggestion_is_too_broad(field: &str, count: i64) -> bool {
+    field == "app" && count < 6
+}
+
+fn build_rich_rule_candidates(
+    conn: &Connection,
+    activity: &Activity,
+    project_id: i64,
+    threshold: i64,
+) -> Result<Vec<(String, String, String, String)>> {
+    let app_name = activity.app_name.trim();
+    if app_name.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut candidates = Vec::new();
+    let mut stmt = conn.prepare(r#"
+        SELECT domain, COUNT(*) AS c
+        FROM rule_learning_events
+        WHERE project_id = ?1
+          AND app_name = ?2
+          AND domain IS NOT NULL
+          AND length(trim(domain)) > 0
+        GROUP BY domain
+        ORDER BY c DESC, max(updated_at) DESC
+        LIMIT 4
+    "#)?;
+    let rows = stmt.query_map(params![project_id, app_name], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let domains = rows.collect::<Result<Vec<_>>>()?;
+    let domain_total: i64 = domains.iter().map(|(_, count)| *count).sum();
+    if domain_total >= threshold && !domains.is_empty() {
+        let domain_nodes: Vec<serde_json::Value> = domains.iter()
+            .map(|(domain, _)| serde_json::json!({
+                "field": "url",
+                "operator": "contains",
+                "value": domain,
+                "negated": false
+            }))
+            .collect();
+        let value = serde_json::json!({
+            "combinator": "and",
+            "conditions": [
+                {
+                    "field": "app",
+                    "operator": "equals",
+                    "value": app_name,
+                    "negated": false
+                },
+                {
+                    "combinator": "or",
+                    "conditions": domain_nodes
+                }
+            ]
+        }).to_string();
+        upsert_learning_signal_count(conn, project_id, "compound", "matches", &value, domain_total)?;
+        let joined = domains.iter()
+            .map(|(domain, _)| format!("domain contains \"{}\"", domain))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        candidates.push((
+            "compound".to_string(),
+            "matches".to_string(),
+            value,
+            format!("app equals \"{}\" AND ({})", app_name, joined),
+        ));
+    }
+
+    Ok(candidates)
+}
+
+fn signal_count(conn: &Connection, project_id: i64, field: &str, operator: &str, value: &str) -> Result<i64> {
+    conn.query_row(
+        "SELECT count FROM rule_learning_signals WHERE project_id = ?1 AND field = ?2 AND operator = ?3 AND value = ?4",
+        params![project_id, field, operator, value],
+        |row| row.get(0),
+    )
+}
+
+fn upsert_learning_signal_count(
+    conn: &Connection,
+    project_id: i64,
+    field: &str,
+    operator: &str,
+    value: &str,
+    count: i64,
+) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(r#"
+        INSERT INTO rule_learning_signals
+            (project_id, field, operator, value, count, dismissed, created, last_prompted_count, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, ?6)
+        ON CONFLICT(project_id, field, operator, value) DO UPDATE SET
+            count = excluded.count,
+            updated_at = excluded.updated_at
+    "#, params![project_id, field, operator, value, count, now])?;
+    Ok(())
+}
+
+fn mark_rule_suggestion_prompted_conn(
+    conn: &Connection,
+    project_id: i64,
+    field: &str,
+    operator: &str,
+    value: &str,
+    count: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE rule_learning_signals SET last_prompted_count = ?5 WHERE project_id = ?1 AND field = ?2 AND operator = ?3 AND value = ?4",
+        params![project_id, field, operator, value, count],
+    )?;
+    Ok(())
+}
+
+pub fn dismiss_rule_suggestion(project_id: i64, field: &str, operator: &str, value: &str) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    conn.execute(
+        "UPDATE rule_learning_signals SET dismissed = 1 WHERE project_id = ?1 AND field = ?2 AND operator = ?3 AND value = ?4",
+        params![project_id, field, operator, value],
+    )?;
+    Ok(())
+}
+
+pub fn mark_rule_suggestion_created(project_id: i64, field: &str, operator: &str, value: &str) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    conn.execute(
+        "UPDATE rule_learning_signals SET created = 1 WHERE project_id = ?1 AND field = ?2 AND operator = ?3 AND value = ?4",
+        params![project_id, field, operator, value],
     )?;
     Ok(())
 }

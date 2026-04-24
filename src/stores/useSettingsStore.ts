@@ -9,6 +9,8 @@ interface SettingsStore {
   /** 0 means no focus project set */
   activeProjectId: number;
   rulesOverrideActive: boolean;
+  autoRuleSuggestionsEnabled: boolean;
+  autoCreateSuggestedRulesEnabled: boolean;
   trackingPaused: boolean;
   idleThresholdSecs: number;
   loadSettings: () => Promise<void>;
@@ -17,6 +19,8 @@ interface SettingsStore {
   setOnboardingComplete: () => Promise<void>;
   setActiveProject: (projectId: number) => Promise<void>;
   setRulesOverrideActive: (enabled: boolean) => Promise<void>;
+  setAutoRuleSuggestionsEnabled: (enabled: boolean) => Promise<void>;
+  setAutoCreateSuggestedRulesEnabled: (enabled: boolean) => Promise<void>;
   setTrackingPaused: (paused: boolean) => Promise<void>;
   setIdleThreshold: (secs: number) => Promise<void>;
 }
@@ -27,6 +31,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   onboardingComplete: false,
   activeProjectId: 0,
   rulesOverrideActive: true,
+  autoRuleSuggestionsEnabled: true,
+  autoCreateSuggestedRulesEnabled: false,
   trackingPaused: false,
   idleThresholdSecs: 300,
 
@@ -37,6 +43,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
       const ob            = await invoke<string | null>('get_setting', { key: 'onboarding_complete' });
       const activeProject = await invoke<number>('get_active_project');
       const rulesOverride = await invoke<boolean>('get_rules_override');
+      const autoRuleSuggestions = await invoke<string | null>('get_setting', { key: 'auto_rule_suggestions_enabled' });
+      const autoCreateSuggestedRules = await invoke<string | null>('get_setting', { key: 'auto_create_suggested_rules_enabled' });
       const paused        = await invoke<boolean>('get_tracking_paused');
       const idleThreshold = await invoke<number>('get_idle_threshold');
       set({
@@ -45,6 +53,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
         onboardingComplete: ob === 'true',
         activeProjectId: activeProject,
         rulesOverrideActive: rulesOverride,
+        autoRuleSuggestionsEnabled: autoRuleSuggestions == null ? true : autoRuleSuggestions === 'true',
+        autoCreateSuggestedRulesEnabled: autoCreateSuggestedRules === 'true',
         trackingPaused: paused,
         idleThresholdSecs: idleThreshold,
       });
@@ -74,6 +84,16 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   setRulesOverrideActive: async (enabled) => {
     await invoke('set_rules_override', { enabled });
     set({ rulesOverrideActive: enabled });
+  },
+
+  setAutoRuleSuggestionsEnabled: async (enabled) => {
+    await invoke('set_setting', { key: 'auto_rule_suggestions_enabled', value: String(enabled) });
+    set({ autoRuleSuggestionsEnabled: enabled });
+  },
+
+  setAutoCreateSuggestedRulesEnabled: async (enabled) => {
+    await invoke('set_setting', { key: 'auto_create_suggested_rules_enabled', value: String(enabled) });
+    set({ autoCreateSuggestedRulesEnabled: enabled });
   },
 
   setTrackingPaused: async (paused) => {

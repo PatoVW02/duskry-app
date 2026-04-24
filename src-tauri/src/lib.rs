@@ -60,8 +60,42 @@ fn get_activities_for_date(from_ts: i64, to_ts: i64) -> Result<Vec<db::Activity>
 }
 
 #[tauri::command]
-fn assign_activity(activity_id: i64, project_id: i64) -> Result<(), String> {
-    db::assign_activity(activity_id, project_id, "manual").map_err(|e| e.to_string())
+fn assign_activity(activity_id: i64, project_id: i64) -> Result<Option<db::RuleSuggestion>, String> {
+    let previous = db::get_activity(activity_id).ok();
+    db::assign_activity(activity_id, project_id, "manual").map_err(|e| e.to_string())?;
+    let activity = db::get_activity(activity_id).map_err(|e| e.to_string())?;
+    let learned = previous.as_ref().and_then(|a| a.project_id) != Some(project_id);
+    if learned {
+        db::record_assignment_learning(&activity, project_id).map_err(|e| e.to_string())?;
+    }
+
+    let suggestions_enabled = db::get_setting("auto_rule_suggestions_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    if !suggestions_enabled {
+        return Ok(None);
+    }
+
+    if !learned {
+        return Ok(None);
+    }
+
+    let suggestion = db::get_rule_suggestion_for_activity(activity_id, 3).map_err(|e| e.to_string())?;
+    let auto_create = db::get_setting("auto_create_suggested_rules_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    if auto_create {
+        if let Some(s) = suggestion {
+            let value = suggested_rule_value(&s.field, &s.operator, &s.value);
+            let (field, operator) = suggested_rule_storage(&s.field, &s.operator);
+            let _ = db::create_rule(s.project_id, field, operator, &value, 10);
+            let _ = db::mark_rule_suggestion_created(s.project_id, &s.field, &s.operator, &s.value);
+        }
+        return Ok(None);
+    }
+
+    Ok(suggestion)
 }
 
 // ─── Activity mutations ─────────────────────────────────────────────────────
@@ -167,6 +201,56 @@ fn get_rules_for_project(project_id: i64) -> Result<Vec<db::Rule>, String> {
 #[tauri::command]
 fn delete_rule(rule_id: i64) -> Result<(), String> {
     db::delete_rule(rule_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_suggested_rule(
+    project_id: i64,
+    field: String,
+    operator: String,
+    value: String,
+) -> Result<i64, String> {
+    let compound_value = suggested_rule_value(&field, &operator, &value);
+    let (stored_field, stored_operator) = suggested_rule_storage(&field, &operator);
+    let rule_id = db::create_rule(project_id, stored_field, stored_operator, &compound_value, 10)
+        .map_err(|e| e.to_string())?;
+    db::mark_rule_suggestion_created(project_id, &field, &operator, &value)
+        .map_err(|e| e.to_string())?;
+    Ok(rule_id)
+}
+
+fn suggested_rule_value(field: &str, operator: &str, value: &str) -> String {
+    if field == "compound" {
+        return value.to_string();
+    }
+    serde_json::json!({
+        "combinator": "and",
+        "conditions": [{
+            "field": field,
+            "operator": operator,
+            "value": value,
+            "negated": false
+        }]
+    }).to_string()
+}
+
+fn suggested_rule_storage<'a>(field: &'a str, operator: &'a str) -> (&'a str, &'a str) {
+    if field == "compound" {
+        (field, operator)
+    } else {
+        ("compound", "matches")
+    }
+}
+
+#[tauri::command]
+fn dismiss_rule_suggestion(
+    project_id: i64,
+    field: String,
+    operator: String,
+    value: String,
+) -> Result<(), String> {
+    db::dismiss_rule_suggestion(project_id, &field, &operator, &value)
+        .map_err(|e| e.to_string())
 }
 
 // ─── Settings commands ──────────────────────────────────────────────────────
@@ -391,6 +475,8 @@ pub fn run() {
             create_rule,
             get_rules_for_project,
             delete_rule,
+            create_suggested_rule,
+            dismiss_rule_suggestion,
             get_setting,
             set_setting,
             get_license_tier,
@@ -434,4 +520,3 @@ pub fn run() {
             let _ = (app_handle, event);
         });
 }
-

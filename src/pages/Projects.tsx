@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useProjectStore } from '../stores/useProjectStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
@@ -15,6 +15,30 @@ interface Rule {
   priority: number;
 }
 
+interface RuleCondition {
+  type?: 'condition';
+  field: string;
+  operator: string;
+  value: string;
+  negated: boolean;
+}
+
+interface RuleGroup {
+  type?: 'group';
+  combinator: 'and' | 'or';
+  conditions: RuleNode[];
+}
+
+type RuleNode = RuleCondition | RuleGroup;
+type SerializableRuleNode =
+  | Omit<RuleCondition, 'type'>
+  | { combinator: 'and' | 'or'; conditions: SerializableRuleNode[] };
+
+interface CompoundRuleValue {
+  combinator: 'and' | 'or';
+  conditions: RuleNode[];
+}
+
 const FIELD_OPTIONS = [
   { value: 'app',   label: 'App name' },
   { value: 'title', label: 'Window title' },
@@ -27,6 +51,111 @@ const OPERATOR_OPTIONS = [
   { value: 'starts_with', label: 'starts with' },
   { value: 'ends_with',   label: 'ends with' },
 ];
+
+const emptyCondition = (): RuleCondition => ({
+  type: 'condition',
+  field: 'app',
+  operator: 'contains',
+  value: '',
+  negated: false,
+});
+
+const emptyGroup = (): RuleGroup => ({
+  type: 'group',
+  combinator: 'or',
+  conditions: [emptyCondition(), emptyCondition()],
+});
+
+function isGroup(node: RuleNode): node is RuleGroup {
+  return 'conditions' in node;
+}
+
+function parseCompoundRule(rule: Rule): CompoundRuleValue | null {
+  if (rule.field !== 'compound') return null;
+  try {
+    const parsed = JSON.parse(rule.value) as CompoundRuleValue;
+    if (!Array.isArray(parsed.conditions)) return null;
+    return {
+      combinator: parsed.combinator === 'or' ? 'or' : 'and',
+      conditions: parsed.conditions.map(normalizeRuleNode),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRuleNode(node: RuleNode): RuleNode {
+  if (isGroup(node)) {
+    return {
+      type: 'group',
+      combinator: node.combinator === 'or' ? 'or' : 'and',
+      conditions: Array.isArray(node.conditions) ? node.conditions.map(normalizeRuleNode) : [],
+    };
+  }
+  return {
+    type: 'condition',
+    field: node.field,
+    operator: node.operator,
+    value: node.value,
+    negated: Boolean(node.negated),
+  };
+}
+
+function fieldLabel(field: string) {
+  return field === 'app' ? 'app name' : field === 'url' ? 'browser URL' : field === 'title' ? 'window title' : field;
+}
+
+function operatorLabel(operator: string) {
+  return operator.replace('_', ' ');
+}
+
+function conditionLabel(condition: RuleCondition) {
+  return `${condition.negated ? 'NOT ' : ''}${fieldLabel(condition.field)} ${operatorLabel(condition.operator)} "${condition.value}"`;
+}
+
+function nodeHasValue(node: RuleNode): boolean {
+  return isGroup(node)
+    ? node.conditions.some(nodeHasValue)
+    : Boolean(node.value.trim());
+}
+
+function cleanRuleNode(node: RuleNode): RuleNode | null {
+  if (isGroup(node)) {
+    const conditions = node.conditions
+      .map(cleanRuleNode)
+      .filter((child): child is RuleNode => child !== null);
+    if (conditions.length === 0) return null;
+    return {
+      type: 'group',
+      combinator: node.combinator,
+      conditions,
+    };
+  }
+  const value = node.value.trim();
+  if (!value) return null;
+  return { ...node, type: 'condition', value };
+}
+
+function stripNodeTypes(node: RuleNode): SerializableRuleNode {
+  if (isGroup(node)) {
+    return {
+      combinator: node.combinator,
+      conditions: node.conditions.map(stripNodeTypes),
+    };
+  }
+  return {
+    field: node.field,
+    operator: node.operator,
+    value: node.value,
+    negated: node.negated,
+  };
+}
+
+function ruleNodeKey(node: RuleNode, index: number) {
+  return isGroup(node)
+    ? `group-${node.combinator}-${index}`
+    : `${node.field}-${node.operator}-${node.value}-${index}`;
+}
 
 export function Projects() {
   const projects = useProjectStore((s) => s.projects);
@@ -45,9 +174,8 @@ export function Projects() {
   const [expandedId, setExpandedId]     = useState<number | null>(null);
   const [projectRules, setProjectRules] = useState<Record<number, Rule[]>>({});
   const [addingRuleFor, setAddingRuleFor] = useState<number | null>(null);
-  const [ruleField, setRuleField]       = useState('app');
-  const [ruleOperator, setRuleOperator] = useState('contains');
-  const [ruleValue, setRuleValue]       = useState('');
+  const [ruleCombinator, setRuleCombinator] = useState<'and' | 'or'>('and');
+  const [ruleNodes, setRuleNodes] = useState<RuleNode[]>(() => [emptyCondition()]);
   const [savingRule, setSavingRule]     = useState(false);
 
   // ── rule-apply modal ──────────────────────────────
@@ -83,26 +211,29 @@ export function Projects() {
     }
     setExpandedId(id);
     setAddingRuleFor(null);
-    setRuleField('app');
-    setRuleOperator('contains');
-    setRuleValue('');
+    setRuleCombinator('and');
+    setRuleNodes([emptyCondition()]);
     await loadRules(id);
   };
 
   const handleAddRule = async (projectId: number) => {
-    if (!ruleValue.trim()) return;
+    const cleanedNodes = ruleNodes
+      .map(cleanRuleNode)
+      .filter((node): node is RuleNode => node !== null);
+    if (cleanedNodes.length === 0) return;
     setSavingRule(true);
+    const first = cleanedNodes[0];
+    const isSimple = cleanedNodes.length === 1 && !isGroup(first) && !first.negated;
     const ruleId = await invoke<number>('create_rule', {
       projectId,
-      field: ruleField,
-      operator: ruleOperator,
-      value: ruleValue.trim(),
+      field: isSimple ? first.field : 'compound',
+      operator: isSimple ? first.operator : 'matches',
+      value: isSimple ? first.value : JSON.stringify({ combinator: ruleCombinator, conditions: cleanedNodes.map(stripNodeTypes) }),
       priority: 0,
     });
     await loadRules(projectId);
-    setRuleValue('');
-    setRuleField('app');
-    setRuleOperator('contains');
+    setRuleCombinator('and');
+    setRuleNodes([emptyCondition()]);
     setAddingRuleFor(null);
     setSavingRule(false);
     // offer retroactive application
@@ -117,6 +248,57 @@ export function Projects() {
       projectId,
       projectName: project?.name ?? 'this project',
       projectColor: project?.color ?? '#86EFAC',
+    });
+  };
+
+  const updateRuleNode = (path: number[], updater: (node: RuleNode) => RuleNode) => {
+    const updateAtPath = (nodes: RuleNode[], depth: number): RuleNode[] => {
+      const index = path[depth];
+      return nodes.map((node, i) => {
+        if (i !== index) return node;
+        if (depth === path.length - 1) return updater(node);
+        if (!isGroup(node)) return node;
+        return { ...node, conditions: updateAtPath(node.conditions, depth + 1) };
+      });
+    };
+    setRuleNodes((nodes) => updateAtPath(nodes, 0));
+  };
+
+  const updateRuleCondition = (path: number[], patch: Partial<RuleCondition>) => {
+    updateRuleNode(path, (node) => isGroup(node) ? node : { ...node, ...patch });
+  };
+
+  const updateRuleGroup = (path: number[], patch: Partial<RuleGroup>) => {
+    updateRuleNode(path, (node) => isGroup(node) ? { ...node, ...patch } : node);
+  };
+
+  const addNodeToGroup = (path: number[], nodeToAdd: RuleNode) => {
+    if (path.length === 0) {
+      setRuleNodes((nodes) => [...nodes, nodeToAdd]);
+      return;
+    }
+    updateRuleNode(path, (node) => isGroup(node)
+      ? { ...node, conditions: [...node.conditions, nodeToAdd] }
+      : node);
+  };
+
+  const removeRuleNode = (path: number[]) => {
+    if (path.length === 1) {
+      setRuleNodes((nodes) => nodes.length === 1
+        ? [emptyCondition()]
+        : nodes.filter((_, i) => i !== path[0]));
+      return;
+    }
+    const parentPath = path.slice(0, -1);
+    const removeIndex = path[path.length - 1];
+    updateRuleNode(parentPath, (node) => {
+      if (!isGroup(node)) return node;
+      return {
+        ...node,
+        conditions: node.conditions.length === 1
+          ? [emptyCondition()]
+          : node.conditions.filter((_, i) => i !== removeIndex),
+      };
     });
   };
 
@@ -148,6 +330,147 @@ export function Projects() {
   const handleDeleteRule = async (ruleId: number, projectId: number) => {
     await invoke('delete_rule', { ruleId });
     await loadRules(projectId);
+  };
+
+  const renderRuleNodeDisplay = (node: RuleNode, index: number, combinator: 'and' | 'or', depth = 0): ReactNode => {
+    const prefix = index > 0 ? combinator.toUpperCase() : depth > 0 ? '(' : '';
+    if (isGroup(node)) {
+      return (
+        <div key={ruleNodeKey(node, index)} style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 6,
+          minWidth: 0,
+          paddingLeft: depth > 0 ? 10 : 0,
+        }}>
+          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.24)', width: 30, flexShrink: 0, paddingTop: 2 }}>
+            {prefix}
+          </span>
+          <div style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            borderLeft: depth > 0 ? '1px solid rgba(45,212,191,0.18)' : undefined,
+            paddingLeft: depth > 0 ? 8 : 0,
+          }}>
+            {node.conditions.map((child, childIndex) => renderRuleNodeDisplay(child, childIndex, node.combinator, depth + 1))}
+          </div>
+          {depth > 0 && <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.24)', paddingTop: 2 }}>)</span>}
+        </div>
+      );
+    }
+    return (
+      <div key={ruleNodeKey(node, index)} style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+        paddingLeft: depth > 1 ? 10 : 0,
+      }}>
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.24)', width: 30, flexShrink: 0 }}>
+          {prefix}
+        </span>
+        <span style={{
+          fontSize: 12,
+          fontWeight: 500,
+          flex: 1,
+          background: 'rgba(255,255,255,0.07)',
+          padding: '2px 7px',
+          borderRadius: 4,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {conditionLabel(node)}
+        </span>
+      </div>
+    );
+  };
+
+  const renderRuleNodeEditor = (node: RuleNode, path: number[], depth = 0): ReactNode => {
+    if (isGroup(node)) {
+      return (
+        <div key={path.join('-')} style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 7,
+          padding: '8px 8px 8px 10px',
+          borderLeft: '1px solid rgba(45,212,191,0.22)',
+          background: depth > 0 ? 'rgba(255,255,255,0.025)' : 'transparent',
+          borderRadius: 6,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.38)' }}>Group matches</span>
+            <Select
+              value={node.combinator}
+              onChange={(v) => updateRuleGroup(path, { combinator: v === 'or' ? 'or' : 'and' })}
+              options={[
+                { value: 'and', label: 'all conditions' },
+                { value: 'or', label: 'any condition' },
+              ]}
+            />
+            <button
+              type="button"
+              onClick={() => removeRuleNode(path)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.24)', padding: '4px', display: 'flex', alignItems: 'center' }}
+              title="Remove group"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          {node.conditions.map((child, index) => renderRuleNodeEditor(child, [...path, index], depth + 1))}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => addNodeToGroup(path, emptyCondition())} style={{ background: 'none', border: '0.5px dashed rgba(255,255,255,0.14)', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', fontSize: 12, borderRadius: 6, padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Plus size={11} /> Add condition
+            </button>
+            <button type="button" onClick={() => addNodeToGroup(path, emptyGroup())} style={{ background: 'none', border: '0.5px dashed rgba(45,212,191,0.22)', cursor: 'pointer', color: 'rgba(45,212,191,0.58)', fontSize: 12, borderRadius: 6, padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Plus size={11} /> Add group
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={path.join('-')} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', paddingLeft: depth > 0 ? 6 : 0 }}>
+        <button
+          type="button"
+          onClick={() => updateRuleCondition(path, { negated: !node.negated })}
+          style={{
+            width: 'auto',
+            padding: '6px 9px',
+            fontSize: 11,
+            borderRadius: 6,
+            border: `0.5px solid ${node.negated ? 'rgba(248,113,113,0.35)' : 'rgba(255,255,255,0.10)'}`,
+            background: node.negated ? 'rgba(248,113,113,0.12)' : 'rgba(255,255,255,0.05)',
+            color: node.negated ? 'rgba(248,113,113,0.82)' : 'rgba(255,255,255,0.38)',
+          }}
+        >
+          NOT
+        </button>
+        <Select value={node.field} onChange={(v) => updateRuleCondition(path, { field: v })} options={FIELD_OPTIONS} />
+        <Select value={node.operator} onChange={(v) => updateRuleCondition(path, { operator: v })} options={OPERATOR_OPTIONS} />
+        <input
+          className="glass-input"
+          placeholder="e.g. VS Code"
+          value={node.value}
+          onChange={(e) => updateRuleCondition(path, { value: e.target.value })}
+          onKeyDown={(e) => e.key === 'Enter' && addingRuleFor && handleAddRule(addingRuleFor)}
+          style={{ flex: '1 1 130px', fontSize: 12, padding: '7px 10px' }}
+          autoFocus={path.length === 1 && path[0] === 0}
+        />
+        <button
+          type="button"
+          onClick={() => removeRuleNode(path)}
+          title="Remove condition"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.24)', padding: '4px', display: 'flex', alignItems: 'center' }}
+        >
+          <X size={12} />
+        </button>
+      </div>
+    );
   };
 
   return (
@@ -338,39 +661,99 @@ export function Projects() {
                       )}
 
                       {/* existing rules */}
-                      {rules.map((r) => (
-                        <div key={r.id} style={{
-                          display: 'flex', alignItems: 'center', gap: 8,
-                          padding: '6px 0',
-                          borderBottom: '0.5px solid rgba(255,255,255,0.05)',
-                        }}>
-                          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)', width: 72, flexShrink: 0 }}>
-                          {r.field === 'app' ? 'app name' : r.field === 'url' ? 'browser URL' : 'window title'}
-                          </span>
-                          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', flexShrink: 0 }}>
-                            {r.operator.replace('_', '\u00a0')}
-                          </span>
-                          <span style={{
-                            fontSize: 12, fontWeight: 500, flex: 1,
-                            background: 'rgba(255,255,255,0.07)',
-                            padding: '1px 7px', borderRadius: 4,
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                          }}>
-                            {r.value}
-                          </span>
-                          <button
-                            onClick={() => handleDeleteRule(r.id, pid)}
-                            title="Delete rule"
-                            style={{
-                              background: 'none', border: 'none', cursor: 'pointer',
-                              color: 'rgba(255,255,255,0.22)', padding: '2px', display: 'flex', alignItems: 'center',
-                              flexShrink: 0,
-                            }}
-                          >
-                            <X size={12} />
-                          </button>
-                        </div>
-                      ))}
+                      {rules.map((r, ruleIndex) => {
+                        const compound = parseCompoundRule(r);
+                        const singleCompoundCondition =
+                          compound?.conditions.length === 1 && !isGroup(compound.conditions[0])
+                            ? compound.conditions[0]
+                            : null;
+                        return (
+                          <div key={r.id}>
+                            {ruleIndex > 0 && (
+                              <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                padding: '4px 0 2px',
+                              }}>
+                                <span style={{ width: 72, flexShrink: 0 }} />
+                                <span style={{
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  color: 'rgba(45,212,191,0.68)',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.06em',
+                                  flexShrink: 0,
+                                }}>
+                                  OR
+                                </span>
+                                <span style={{ height: 1, flex: 1, background: 'rgba(45,212,191,0.10)' }} />
+                              </div>
+                            )}
+                            <div style={{
+                              display: 'flex', alignItems: compound && !singleCompoundCondition ? 'flex-start' : 'center', gap: 8,
+                              padding: '6px 0',
+                              borderBottom: '0.5px solid rgba(255,255,255,0.05)',
+                            }}>
+                              {singleCompoundCondition ? (
+                                <>
+                                  <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)', width: 72, flexShrink: 0 }}>
+                                    {fieldLabel(singleCompoundCondition.field)}
+                                  </span>
+                                  <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', flexShrink: 0 }}>
+                                    {operatorLabel(singleCompoundCondition.operator)}
+                                  </span>
+                                  <span style={{
+                                    fontSize: 12, fontWeight: 500, flex: 1,
+                                    background: 'rgba(255,255,255,0.07)',
+                                    padding: '1px 7px', borderRadius: 4,
+                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  }}>
+                                    {singleCompoundCondition.value}
+                                  </span>
+                                </>
+                              ) : compound ? (
+                                <>
+                                  <span style={{ fontSize: 10.5, color: 'rgba(45,212,191,0.65)', width: 72, flexShrink: 0, paddingTop: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                    {compound.combinator === 'and' ? 'All' : 'Any'}
+                                  </span>
+                                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    {compound.conditions.map((node, index) => renderRuleNodeDisplay(node, index, compound.combinator))}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)', width: 72, flexShrink: 0 }}>
+                                    {fieldLabel(r.field)}
+                                  </span>
+                                  <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', flexShrink: 0 }}>
+                                    {operatorLabel(r.operator)}
+                                  </span>
+                                  <span style={{
+                                    fontSize: 12, fontWeight: 500, flex: 1,
+                                    background: 'rgba(255,255,255,0.07)',
+                                    padding: '1px 7px', borderRadius: 4,
+                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  }}>
+                                    {r.value}
+                                  </span>
+                                </>
+                              )}
+                              <button
+                                onClick={() => handleDeleteRule(r.id, pid)}
+                                title="Delete rule"
+                                style={{
+                                  background: 'none', border: 'none', cursor: 'pointer',
+                                  color: 'rgba(255,255,255,0.22)', padding: '2px', display: 'flex', alignItems: 'center',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
 
                       {/* add-rule form */}
                       {addingRuleFor === pid ? (
@@ -380,39 +763,62 @@ export function Projects() {
                           border: '0.5px solid rgba(255,255,255,0.08)',
                           display: 'flex', flexDirection: 'column', gap: 8,
                         }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.38)' }}>Match</span>
+                            <Select
+                              value={ruleCombinator}
+                              onChange={(v) => setRuleCombinator(v === 'or' ? 'or' : 'and')}
+                              options={[
+                                { value: 'and', label: 'all conditions' },
+                                { value: 'or', label: 'any condition' },
+                              ]}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                            {ruleNodes.map((node, index) => renderRuleNodeEditor(node, [index]))}
+                          </div>
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            <Select
-                              value={ruleField}
-                              onChange={(v) => setRuleField(v)}
-                              options={FIELD_OPTIONS}
-                            />
-                            <Select
-                              value={ruleOperator}
-                              onChange={(v) => setRuleOperator(v)}
-                              options={OPERATOR_OPTIONS}
-                            />
-                            <input
-                              className="glass-input"
-                              placeholder="e.g. VS Code"
-                              value={ruleValue}
-                              onChange={(e) => setRuleValue(e.target.value)}
-                              onKeyDown={(e) => e.key === 'Enter' && handleAddRule(pid)}
-                              style={{ flex: '1 1 120px', fontSize: 12, padding: '7px 10px' }}
-                              autoFocus
-                            />
+                            <button
+                              type="button"
+                              onClick={() => addNodeToGroup([], emptyCondition())}
+                              style={{
+                                alignSelf: 'flex-start',
+                                background: 'none',
+                                border: '0.5px dashed rgba(255,255,255,0.14)',
+                                cursor: 'pointer', color: 'rgba(255,255,255,0.35)',
+                                fontSize: 12, borderRadius: 6, padding: '5px 10px',
+                                display: 'flex', alignItems: 'center', gap: 5,
+                              }}
+                            >
+                              <Plus size={11} /> Add condition
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => addNodeToGroup([], emptyGroup())}
+                              style={{
+                                alignSelf: 'flex-start',
+                                background: 'none',
+                                border: '0.5px dashed rgba(45,212,191,0.22)',
+                                cursor: 'pointer', color: 'rgba(45,212,191,0.58)',
+                                fontSize: 12, borderRadius: 6, padding: '5px 10px',
+                                display: 'flex', alignItems: 'center', gap: 5,
+                              }}
+                            >
+                              <Plus size={11} /> Add group
+                            </button>
                           </div>
                           <div style={{ display: 'flex', gap: 6 }}>
                             <button
                               className="btn-primary"
                               onClick={() => handleAddRule(pid)}
-                              disabled={savingRule || !ruleValue.trim()}
+                              disabled={savingRule || !ruleNodes.some(nodeHasValue)}
                               style={{ fontSize: 12, padding: '5px 14px', width: 'auto' }}
                             >
                               {savingRule ? 'Saving…' : 'Add rule'}
                             </button>
                             <button
                               className="btn-secondary"
-                              onClick={() => { setAddingRuleFor(null); setRuleValue(''); }}
+                              onClick={() => { setAddingRuleFor(null); setRuleCombinator('and'); setRuleNodes([emptyCondition()]); }}
                               style={{ fontSize: 12, padding: '5px 14px', width: 'auto' }}
                             >
                               Cancel
@@ -421,7 +827,7 @@ export function Projects() {
                         </div>
                       ) : (
                         <button
-                          onClick={() => setAddingRuleFor(pid)}
+                          onClick={() => { setAddingRuleFor(pid); setRuleCombinator('and'); setRuleNodes([emptyCondition()]); }}
                           style={{
                             marginTop: 8,
                             background: 'none',
