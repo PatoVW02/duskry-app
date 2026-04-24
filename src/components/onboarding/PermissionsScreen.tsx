@@ -8,6 +8,7 @@ interface Props { onNext: () => void; }
 export function PermissionsScreen({ onNext }: Props) {
   const [os, setOs] = useState<'macos' | 'windows' | 'unknown'>('unknown');
   const [accessibilityGranted, setAccessibilityGranted] = useState(false);
+  const [screenRecordingGranted, setScreenRecordingGranted] = useState(false);
 
   useEffect(() => {
     invoke<string>('get_os').then((o) => setOs(o as any));
@@ -16,8 +17,12 @@ export function PermissionsScreen({ onNext }: Props) {
   useEffect(() => {
     if (os !== 'macos') return;
     const id = setInterval(async () => {
-      const granted = await invoke<boolean>('check_accessibility');
-      setAccessibilityGranted(granted);
+      const [accessibility, screenRecording] = await Promise.all([
+        invoke<boolean>('check_accessibility'),
+        invoke<boolean>('check_screen_recording'),
+      ]);
+      setAccessibilityGranted(accessibility);
+      setScreenRecordingGranted(screenRecording);
     }, 1000);
     return () => clearInterval(id);
   }, [os]);
@@ -44,7 +49,7 @@ export function PermissionsScreen({ onNext }: Props) {
           <PermissionRow
             title="Screen Recording (optional)"
             description="Only needed for file path tracking in sandboxed apps."
-            granted={false}
+            granted={screenRecordingGranted}
             onGrant={() => invoke('request_screen_recording')}
             optional
           />
