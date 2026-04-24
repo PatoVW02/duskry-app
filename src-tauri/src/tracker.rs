@@ -1,3 +1,4 @@
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -13,7 +14,13 @@ pub struct ActiveWindow {
 }
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+static SUPPORT_THREADS_STARTED: AtomicBool = AtomicBool::new(false);
+static WATCHDOG_RUNNING: AtomicBool = AtomicBool::new(false);
+static TRACKER_HEARTBEAT_TS: AtomicI64 = AtomicI64::new(0);
 static CURRENT_ACTIVITY_ID: AtomicI64 = AtomicI64::new(0);
+
+const WATCHDOG_INTERVAL_SECS: u64 = 60;
+const TRACKER_STALE_AFTER_SECS: i64 = 90;
 
 /// The project set by the menu bar "focus" selector. 0 = none.
 pub static ACTIVE_PROJECT_ID: AtomicI64  = AtomicI64::new(0);
@@ -41,16 +48,26 @@ fn last_window_cache() -> &'static Mutex<Option<ActiveWindow>> {
 }
 
 pub fn start_tracking_loop() {
-    if RUNNING.swap(true, Ordering::SeqCst) {
-        crate::logger::tlog("start_tracking_loop called but already running — skipped");
+    crate::logger::tlog("start_tracking_loop requested");
+    start_support_threads_once();
+    start_watchdog_once();
+    start_tracking_worker();
+}
+
+fn start_support_threads_once() {
+    if SUPPORT_THREADS_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    crate::logger::tlog("Tracking loop starting");
+
     // Read persisted idle threshold; default 300 s (5 min).
     let idle_threshold = crate::db::get_setting("idle_threshold_secs")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(300);
     IDLE_THRESHOLD_CACHE.store(idle_threshold, Ordering::Relaxed);
+    crate::logger::tlog(&format!(
+        "Tracker support monitors starting (idle_threshold={}s)",
+        idle_threshold
+    ));
 
     // Background thread: refreshes display-sleep-prevented (pmset) every 15 s.
     std::thread::spawn(|| {
@@ -71,7 +88,96 @@ pub fn start_tracking_loop() {
             std::thread::sleep(Duration::from_secs(2));
         }
     });
+}
+
+fn start_watchdog_once() {
+    if WATCHDOG_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
     std::thread::spawn(|| {
+        crate::logger::tlog(&format!(
+            "Tracker watchdog started (interval={}s stale_after={}s)",
+            WATCHDOG_INTERVAL_SECS,
+            TRACKER_STALE_AFTER_SECS
+        ));
+        let mut last_ok_log = 0i64;
+        let mut last_paused_log = 0i64;
+        let mut last_idle_log = 0i64;
+        loop {
+            let now = Utc::now().timestamp();
+
+            if TRACKING_PAUSED.load(Ordering::SeqCst) {
+                if now - last_paused_log >= 300 {
+                    last_paused_log = now;
+                    crate::logger::tlog("Watchdog: tracker check deferred while manually paused");
+                }
+                continue;
+            }
+
+            let idle_secs = IDLE_SECS_CACHE.load(Ordering::Relaxed);
+            if IS_IDLE_CACHED.load(Ordering::Relaxed) && !is_engaged() {
+                if now - last_idle_log >= 300 {
+                    last_idle_log = now;
+                    crate::logger::tlog(&format!(
+                        "Watchdog: tracker check deferred while idle (idle={}s)",
+                        idle_secs
+                    ));
+                }
+                continue;
+            }
+
+            let heartbeat = TRACKER_HEARTBEAT_TS.load(Ordering::SeqCst);
+            let running = RUNNING.load(Ordering::SeqCst);
+            let stale = heartbeat > 0 && now - heartbeat > TRACKER_STALE_AFTER_SECS;
+            let heartbeat_age = if heartbeat > 0 { now - heartbeat } else { -1 };
+
+            if !running || stale {
+                crate::logger::tlog(&format!(
+                    "Watchdog: restarting tracker (running={} heartbeat_age={}s idle={}s)",
+                    running,
+                    heartbeat_age,
+                    idle_secs
+                ));
+                RUNNING.store(false, Ordering::SeqCst);
+                start_tracking_worker();
+                crate::logger::tlog("Watchdog: restart signal sent");
+            } else if now - last_ok_log >= 300 {
+                last_ok_log = now;
+                crate::logger::tlog(&format!(
+                    "Watchdog: tracker healthy (heartbeat_age={}s idle={}s activity=#{})",
+                    heartbeat_age,
+                    idle_secs,
+                    CURRENT_ACTIVITY_ID.load(Ordering::SeqCst)
+                ));
+            }
+            std::thread::sleep(Duration::from_secs(WATCHDOG_INTERVAL_SECS));
+        }
+    });
+}
+
+fn start_tracking_worker() {
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        crate::logger::tlog("start_tracking_loop called but already running — skipped");
+        return;
+    }
+    crate::logger::tlog("Tracking loop starting");
+    TRACKER_HEARTBEAT_TS.store(Utc::now().timestamp(), Ordering::SeqCst);
+    std::thread::spawn(|| {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            tracking_worker_loop();
+        }));
+        RUNNING.store(false, Ordering::SeqCst);
+        CURRENT_ACTIVITY_ID.store(0, Ordering::SeqCst);
+        if result.is_err() {
+            crate::logger::tlog("Tracker thread panicked; watchdog will restart it");
+        } else {
+            crate::logger::tlog("Tracker thread exited; watchdog will restart it if needed");
+        }
+    });
+}
+
+fn tracking_worker_loop() {
         let mut last: Option<ActiveWindow> = None;
         let idle_threshold = IDLE_THRESHOLD_CACHE.load(Ordering::Relaxed);
         let mut was_idle        = false; // track transitions for resume logging
@@ -84,6 +190,7 @@ pub fn start_tracking_loop() {
 
         loop {
             std::thread::sleep(Duration::from_secs(5));
+            TRACKER_HEARTBEAT_TS.store(Utc::now().timestamp(), Ordering::SeqCst);
 
             // ── Pause check ──────────────────────────────────────────
             if TRACKING_PAUSED.load(Ordering::SeqCst) {
@@ -295,7 +402,6 @@ pub fn start_tracking_loop() {
                 }
             }
         }
-    });
 }
 
 pub fn get_current_window() -> Option<ActiveWindow> {
@@ -613,4 +719,3 @@ fn is_engaged() -> bool {
 fn is_engaged() -> bool {
     false
 }
-

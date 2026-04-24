@@ -441,6 +441,16 @@ pub fn run() {
             tracker::TRACKING_PAUSED
                 .store(paused, std::sync::atomic::Ordering::SeqCst);
 
+            let onboarding_complete = db::get_setting("onboarding_complete")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            if onboarding_complete {
+                logger::tlog("Backend setup: onboarding complete; starting tracker watchdog");
+                tracker::start_tracking_loop();
+            } else {
+                logger::tlog("Backend setup: onboarding incomplete; tracker watchdog not started");
+            }
+
             // ── Hide window on close instead of quitting ─────────────────
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
