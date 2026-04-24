@@ -8,7 +8,7 @@ import {
 import { useProjectStore } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { openCheckout } from '../lib/checkout';
-import { formatDuration } from '../lib/utils';
+import { formatDuration, isDeepWorkActivity } from '../lib/utils';
 import type { Activity } from '../stores/useActivityStore';
 
 // ── Range helpers ──────────────────────────────────────────────────────────
@@ -199,8 +199,8 @@ export function Reports() {
 
   const totalSecs         = activities.reduce((s, a) => s + (a.duration_s ?? 0), 0);
   const prevTotalSecs     = prevActs.reduce((s, a) => s + (a.duration_s ?? 0), 0);
-  const deepWorkSecs      = activities.filter((a) => a.project_id !== null && (a.duration_s ?? 0) >= 300).reduce((s, a) => s + (a.duration_s ?? 0), 0);
-  const prevDeepWorkSecs  = prevActs.filter((a) => a.project_id !== null && (a.duration_s ?? 0) >= 300).reduce((s, a) => s + (a.duration_s ?? 0), 0);
+  const deepWorkSecs      = activities.filter(isDeepWorkActivity).reduce((s, a) => s + (a.duration_s ?? 0), 0);
+  const prevDeepWorkSecs  = prevActs.filter(isDeepWorkActivity).reduce((s, a) => s + (a.duration_s ?? 0), 0);
 
   const secsPerDay: Record<string, number> = {};
   for (const a of activities) {
@@ -586,4 +586,3 @@ export function Reports() {
     </>
   );
 }
-

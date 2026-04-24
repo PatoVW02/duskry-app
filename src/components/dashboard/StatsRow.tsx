@@ -1,11 +1,11 @@
 import { useActivityStore } from '../../stores/useActivityStore';
-import { formatDuration } from '../../lib/utils';
+import { formatDuration, isDeepWorkActivity } from '../../lib/utils';
 
 export function StatsRow() {
   const activities = useActivityStore((s) => s.activities);
   const totalSecs = useActivityStore((s) => s.totalTrackedSecs)();
   const deepWorkSecs = activities
-    .filter((a) => a.project_id !== null && (a.duration_s ?? 0) >= 300)
+    .filter(isDeepWorkActivity)
     .reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
   const unassignedCount = activities.filter((a) => !a.project_id).length;
 

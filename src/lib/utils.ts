@@ -22,6 +22,60 @@ export function formatDurationLong(seconds: number): string {
   return `${s}s`;
 }
 
+export interface DeepWorkActivity {
+  app_name: string;
+  window_title: string | null;
+  domain: string | null;
+  duration_s: number | null;
+  project_id: number | null;
+}
+
+const DEEP_WORK_MIN_SECONDS = 15 * 60;
+
+const VIDEO_APPS = [
+  'vlc',
+  'quicktime player',
+  'iina',
+  'infuse',
+  'plex',
+  'mpv',
+  'elmedia player',
+  'movist',
+  'apple tv',
+  'tv',
+];
+
+const VIDEO_SIGNALS = [
+  'youtube',
+  'youtu.be',
+  'netflix',
+  'twitch',
+  'disney+',
+  'disney plus',
+  'prime video',
+  'hbo max',
+  'max.com',
+  'apple tv+',
+  'hulu',
+  'vimeo',
+  'dailymotion',
+];
+
+export function isVideoActivity(activity: Pick<DeepWorkActivity, 'app_name' | 'window_title' | 'domain'>): boolean {
+  const app = activity.app_name.toLowerCase();
+  const title = (activity.window_title ?? '').toLowerCase();
+  const domain = (activity.domain ?? '').toLowerCase();
+
+  return VIDEO_APPS.some((signal) => app === signal || app.startsWith(signal))
+    || VIDEO_SIGNALS.some((signal) => title.includes(signal) || domain.includes(signal));
+}
+
+export function isDeepWorkActivity(activity: DeepWorkActivity): boolean {
+  return activity.project_id !== null
+    && (activity.duration_s ?? 0) >= DEEP_WORK_MIN_SECONDS
+    && !isVideoActivity(activity);
+}
+
 export function todayLabel(): string {
   return new Date().toLocaleDateString('en-US', {
     weekday: 'long',
