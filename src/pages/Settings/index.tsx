@@ -3,16 +3,18 @@ import { getVersion } from '@tauri-apps/api/app';
 import { Appearance } from './Appearance';
 import { Tracking } from './Tracking';
 import { Billing } from './Billing';
-import { Palette, Info, SlidersHorizontal, CreditCard, RefreshCw, Download, CheckCircle, AlertCircle } from 'lucide-react';
+import { Permissions } from './Permissions';
+import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle } from 'lucide-react';
 import { useUpdaterContext } from '../../contexts/UpdaterContext';
 
-type SettingsTab = 'appearance' | 'tracking' | 'billing' | 'about';
+type SettingsTab = 'appearance' | 'tracking' | 'permissions' | 'billing' | 'about';
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'appearance', label: 'Appearance',  icon: <Palette size={13} /> },
-  { id: 'tracking',   label: 'Tracking',    icon: <SlidersHorizontal size={13} /> },
-  { id: 'billing',    label: 'Billing',     icon: <CreditCard size={13} /> },
-  { id: 'about',      label: 'About',       icon: <Info size={13} /> },
+  { id: 'appearance',  label: 'Appearance',  icon: <Palette size={13} /> },
+  { id: 'tracking',    label: 'Tracking',    icon: <SlidersHorizontal size={13} /> },
+  { id: 'permissions', label: 'Permissions', icon: <ShieldCheck size={13} /> },
+  { id: 'billing',     label: 'Billing',     icon: <CreditCard size={13} /> },
+  { id: 'about',       label: 'About',       icon: <Info size={13} /> },
 ];
 
 export function Settings() {
@@ -36,10 +38,11 @@ export function Settings() {
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        {tab === 'appearance' && <Appearance />}
-        {tab === 'tracking'   && <Tracking />}
-        {tab === 'billing'    && <Billing />}
-        {tab === 'about'      && <AboutTab />}
+        {tab === 'appearance'  && <Appearance />}
+        {tab === 'tracking'    && <Tracking />}
+        {tab === 'permissions' && <Permissions />}
+        {tab === 'billing'     && <Billing />}
+        {tab === 'about'       && <AboutTab />}
       </div>
     </div>
   );

@@ -59,11 +59,15 @@ function App() {
     fetchProjects();
   }, [loadSettings, fetchTier, fetchProjects]);
 
-  // Start tracking loop once onboarding is done (handles returning users)
+  // Start tracking loop for returning users (new users start it in AllSetScreen)
+  const prevOnboardingComplete = useRef(onboardingComplete);
   useEffect(() => {
-    if (onboardingComplete) {
+    // Only invoke on the initial load when already complete (returning user).
+    // Skip when it just flipped true (AllSetScreen already called start_tracking).
+    if (onboardingComplete && prevOnboardingComplete.current) {
       invoke('start_tracking');
     }
+    prevOnboardingComplete.current = onboardingComplete;
   }, [onboardingComplete]);
 
   // Auto-check for updates once on startup, then every 4 hours
@@ -87,7 +91,7 @@ function App() {
       case 3: return <PlanPickerScreen onNext={next} />;
       case 4: return <TrialScreen onNext={next} />;
       case 5: return <FirstProjectScreen onNext={next} />;
-      case 6: return <AllSetScreen onDone={() => loadSettings()} />;
+      case 6: return <AllSetScreen onDone={() => {}} />;
     }
   }
 

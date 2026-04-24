@@ -229,8 +229,9 @@ export function Projects() {
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 3 }}>Idle timeout</div>
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.55 }}>
-              After <strong style={{ color: 'rgba(255,255,255,0.70)' }}>2 minutes</strong> of no keyboard or mouse
+              After <strong style={{ color: 'rgba(255,255,255,0.70)' }}>5 minutes</strong> of no keyboard or mouse
               input, the current activity is automatically paused. Tracking resumes the moment you return.
+              Meetings and video playback are detected automatically and never interrupted.
             </div>
           </div>
           <span style={{

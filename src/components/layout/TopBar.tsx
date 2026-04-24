@@ -67,9 +67,7 @@ export function TopBar({ title, dateNav }: { title: string; dateNav?: DateNav })
               </button>
             )}
           </div>
-        ) : (
-          <span data-tauri-drag-region className="date-pill">{dateNavLabel(new Date())}</span>
-        )}
+        ) : null}
       </div>
 
       <div data-tauri-drag-region style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

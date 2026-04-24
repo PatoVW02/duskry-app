@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -19,13 +20,50 @@ pub static ACTIVE_PROJECT_ID: AtomicI64  = AtomicI64::new(0);
 /// When true the tracking loop stops recording new activities.
 pub static TRACKING_PAUSED:   AtomicBool = AtomicBool::new(false);
 
+/// Last known active window — updated by the tracking loop, read by get_current_window.
+/// This avoids spawning osascript on every JS poll.
+static LAST_WINDOW: OnceLock<Mutex<Option<ActiveWindow>>> = OnceLock::new();
+
+/// Cached result of whether any app is preventing display sleep (video/calls).
+/// Updated every 15 s by a background thread so the tracking loop never blocks.
+static DISPLAY_SLEEP_PREVENTED: AtomicBool = AtomicBool::new(false);
+
+/// Cached idle state, updated every 2 s by a background thread.
+/// Avoids calling `ioreg` (slow subprocess) on every tracking tick.
+static IS_IDLE_CACHED: AtomicBool = AtomicBool::new(false);
+static IDLE_THRESHOLD_CACHE: AtomicI64 = AtomicI64::new(300);
+
+fn last_window_cache() -> &'static Mutex<Option<ActiveWindow>> {
+    LAST_WINDOW.get_or_init(|| Mutex::new(None))
+}
+
 pub fn start_tracking_loop() {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
+    let idle_threshold = 300i64;
+    IDLE_THRESHOLD_CACHE.store(idle_threshold, Ordering::Relaxed);
+
+    // Background thread: refreshes display-sleep-prevented (pmset) every 15 s.
+    std::thread::spawn(|| {
+        loop {
+            DISPLAY_SLEEP_PREVENTED.store(check_display_sleep_prevented(), Ordering::Relaxed);
+            std::thread::sleep(Duration::from_secs(15));
+        }
+    });
+
+    // Background thread: refreshes idle state (ioreg) every 2 s.
+    // Keeps the tracking thread from ever blocking on `ioreg`.
+    std::thread::spawn(|| {
+        loop {
+            let threshold = IDLE_THRESHOLD_CACHE.load(Ordering::Relaxed);
+            IS_IDLE_CACHED.store(is_idle_now(threshold), Ordering::Relaxed);
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    });
     std::thread::spawn(|| {
         let mut last: Option<ActiveWindow> = None;
-        let idle_threshold = 120i64;
+        let idle_threshold = IDLE_THRESHOLD_CACHE.load(Ordering::Relaxed);
 
         loop {
             std::thread::sleep(Duration::from_secs(5));
@@ -42,7 +80,7 @@ pub fn start_tracking_loop() {
                 continue;
             }
 
-            if is_idle(idle_threshold) {
+            if IS_IDLE_CACHED.load(Ordering::Relaxed) && !is_engaged() {
                 if let Some(prev) = last.take() {
                     let now = Utc::now().timestamp();
                     let id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
@@ -51,14 +89,35 @@ pub fn start_tracking_loop() {
                         CURRENT_ACTIVITY_ID.store(0, Ordering::SeqCst);
                     }
                     let _ = prev;
+                    // Clear the cache so is_engaged() sees fresh data on resume,
+                    // not stale meeting-app window that would block idle detection.
+                    if let Ok(mut guard) = last_window_cache().lock() {
+                        *guard = None;
+                    }
                 }
                 continue;
             }
 
-            if let Some(current) = get_active_window() {
+            if let Some(mut current) = get_active_window() {
                 let changed = last.as_ref().map(|w| {
                     w.app_name != current.app_name || w.window_title != current.window_title
                 }).unwrap_or(true);
+
+                if changed {
+                    // Only fetch the browser URL when the window actually changed —
+                    // this is the expensive osascript call (up to 2 s) and is
+                    // pointless on ticks where nothing has switched.
+                    current.url = get_browser_url(&current.app_name);
+                } else if let Some(ref prev) = last {
+                    // Reuse the URL from the previous tick (same window).
+                    current.url = prev.url.clone();
+                }
+
+                // Update the cache so get_current_window() can read it without
+                // spawning a new osascript process.
+                if let Ok(mut guard) = last_window_cache().lock() {
+                    *guard = Some(current.clone());
+                }
 
                 if changed {
                     let now = Utc::now().timestamp();
@@ -86,11 +145,18 @@ pub fn start_tracking_loop() {
                                     let _ = crate::db::assign_activity(new_id, pid, "rule");
                                 }
                             }
+
+                            // Only advance `last` on success — if save failed,
+                            // next tick will retry (changed=true again via last=None).
+                            last = Some(current);
                         }
                         Err(_) => {}
                     }
-
-                    last = Some(current);
+                }
+            } else {
+                // Window gone (idle handled above) — clear cache
+                if let Ok(mut guard) = last_window_cache().lock() {
+                    *guard = None;
                 }
             }
         }
@@ -98,7 +164,8 @@ pub fn start_tracking_loop() {
 }
 
 pub fn get_current_window() -> Option<ActiveWindow> {
-    get_active_window()
+    // Read from the cache populated by the tracking loop — never spawns osascript.
+    last_window_cache().lock().ok()?.clone()
 }
 
 /// Determine which project to assign a new activity to.
@@ -131,13 +198,44 @@ fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option
     crate::rules::apply_rules(window, rules)
 }
 
+/// Run an osascript snippet with a hard timeout.
+/// If the process doesn't respond within `timeout`, it is killed and `None` is returned.
+/// This prevents the tracking thread from blocking forever when osascript hangs
+/// (which happens regularly right after the system wakes from idle or sleep).
+#[cfg(target_os = "macos")]
+fn run_osascript(script: &str, timeout: Duration) -> Option<String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(bytes) => {
+            let _ = child.wait(); // reap
+            let s = String::from_utf8(bytes).ok()?.trim().to_string();
+            if s.is_empty() { None } else { Some(s) }
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait(); // reap zombie
+            None
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn get_active_window() -> Option<ActiveWindow> {
-    use std::process::Command;
-
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(r#"
+    let result = run_osascript(r#"
 tell application "System Events"
     set frontApp to name of first application process whose frontmost is true
     set frontTitle to ""
@@ -146,31 +244,24 @@ tell application "System Events"
     end try
     return frontApp & "|" & frontTitle
 end tell
-        "#)
-        .output()
-        .ok()?;
+    "#, Duration::from_secs(3))?;
 
-    let result = String::from_utf8(output.stdout).ok()?;
-    let result = result.trim();
-    if result.is_empty() {
-        return None;
-    }
     let parts: Vec<&str> = result.splitn(2, '|').collect();
     let app_name = parts.get(0).unwrap_or(&"").trim().to_string();
-    let url = get_browser_url(&app_name);
+    if app_name.is_empty() { return None; }
+    // URL is NOT fetched here — it is fetched by the tracking loop only when
+    // the window changes, keeping the hot-path osascript calls to one per tick.
 
     Some(ActiveWindow {
         app_name,
         window_title: parts.get(1).unwrap_or(&"").trim().to_string(),
-        url,
+        url: None,
         timestamp: Utc::now().timestamp(),
     })
 }
 
 #[cfg(target_os = "macos")]
 fn get_browser_url(app_name: &str) -> Option<String> {
-    use std::process::Command;
-
     let script = match app_name {
         "Google Chrome" | "Chromium" =>
             r#"tell application "Google Chrome" to return URL of active tab of front window"#,
@@ -182,14 +273,13 @@ fn get_browser_url(app_name: &str) -> Option<String> {
             r#"tell application "Brave Browser" to return URL of active tab of front window"#,
         "Arc" =>
             r#"tell application "Arc" to return URL of active tab of front window"#,
+        "Atlas" | "Atlas Browser" =>
+            r#"tell application "Atlas" to return URL of active tab of front window"#,
+        "Orion" =>
+            r#"tell application "Orion" to return URL of active tab of front window"#,
         _ => return None,
     };
-
-    let out = Command::new("osascript")
-        .arg("-e").arg(script)
-        .output().ok()?;
-    let url = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    if url.is_empty() { None } else { Some(url) }
+    run_osascript(script, Duration::from_secs(2))
 }
 
 #[cfg(target_os = "windows")]
@@ -236,10 +326,10 @@ fn get_browser_url(_app_name: &str) -> Option<String> {
     None
 }
 
+/// Reads the cached HIDIdleTime from ioreg. Only called from the background watcher thread.
 #[cfg(target_os = "macos")]
-fn is_idle(threshold_secs: i64) -> bool {
-    use std::process::Command;
-    let output = Command::new("ioreg")
+fn is_idle_now(threshold_secs: i64) -> bool {
+    let output = std::process::Command::new("ioreg")
         .args(["-c", "IOHIDSystem"])
         .output()
         .ok();
@@ -259,12 +349,12 @@ fn is_idle(threshold_secs: i64) -> bool {
     false
 }
 
-#[cfg(target_os = "windows")]
-fn is_idle(threshold_secs: i64) -> bool {
-    use windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo;
-    use windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO;
-    use windows::Win32::System::SystemInformation::GetTickCount;
+#[cfg(not(target_os = "macos"))]
+fn is_idle_now(_threshold_secs: i64) -> bool {
+    #[cfg(target_os = "windows")]
     unsafe {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+        use windows::Win32::System::SystemInformation::GetTickCount;
         let mut info = LASTINPUTINFO {
             cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
             dwTime: 0,
@@ -272,13 +362,73 @@ fn is_idle(threshold_secs: i64) -> bool {
         if GetLastInputInfo(&mut info).as_bool() {
             let now = GetTickCount();
             let idle_ms = now.wrapping_sub(info.dwTime);
-            return (idle_ms / 1000) as i64 >= threshold_secs;
+            return (idle_ms / 1000) as i64 >= _threshold_secs;
         }
     }
     false
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn is_idle(_threshold_secs: i64) -> bool {
+#[cfg(target_os = "macos")]
+fn check_display_sleep_prevented() -> bool {
+    let Ok(out) = std::process::Command::new("pmset")
+        .args(["-g", "assertions"])
+        .output()
+    else { return false; };
+    let s = String::from_utf8_lossy(&out.stdout);
+    for line in s.lines() {
+        if line.contains("PreventUserIdleDisplaySleep") {
+            if let Some(val) = line.split_whitespace().last() {
+                if val != "0" { return true; }
+            }
+        }
+    }
     false
 }
+
+#[cfg(not(target_os = "macos"))]
+fn check_display_sleep_prevented() -> bool { false }
+
+/// Returns true when the user is likely in a meeting or watching video,
+/// even if the mouse/keyboard has been idle — so we don't cut the activity.
+#[cfg(target_os = "macos")]
+fn is_engaged() -> bool {
+    // 1. Cached pmset result — covers any app preventing display sleep
+    //    (video players, screen share, calls) without blocking the tracking thread.
+    if DISPLAY_SLEEP_PREVENTED.load(Ordering::Relaxed) {
+        return true;
+    }
+
+    // 2. Window name / title check as a secondary signal.
+    let Ok(guard) = last_window_cache().lock() else { return false; };
+    let Some(ref win) = *guard else { return false; };
+    let app   = win.app_name.to_lowercase();
+    let title = win.window_title.to_lowercase();
+
+    // Meeting apps
+    let meeting_app = app.contains("zoom")    || app.contains("teams")
+                   || app.contains("webex")   || app.contains("facetime")
+                   || app.contains("discord") || app.contains("slack");
+    let meeting_title = title.contains("google meet")   || title.contains("zoom meeting")
+                     || title.contains("meet.google")    || title.contains("teams meeting");
+
+    // Video player apps
+    let video_app = app == "vlc"             || app == "quicktime player"
+                 || app == "iina"            || app.starts_with("infuse")
+                 || app == "plex"            || app == "mpv"
+                 || app == "elmedia player"  || app == "movist"
+                 || app == "apple tv";
+
+    // Video in browser — tab title contains streaming service name
+    let video_title = title.contains("youtube")     || title.contains("netflix")
+                   || title.contains("twitch")      || title.contains("disney+")
+                   || title.contains("prime video") || title.contains("hbo max")
+                   || title.contains("apple tv+")   || title.contains("hulu");
+
+    meeting_app || meeting_title || video_app || video_title
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_engaged() -> bool {
+    false
+}
+

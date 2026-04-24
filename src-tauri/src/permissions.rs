@@ -8,17 +8,16 @@ pub fn get_os() -> &'static str {
 }
 
 #[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    /// Returns true if this process has been granted Accessibility permission.
+    /// This is the canonical API — accurate and instant, no subprocess needed.
+    fn AXIsProcessTrusted() -> bool;
+}
+
+#[cfg(target_os = "macos")]
 pub fn check_accessibility() -> bool {
-    use std::process::Command;
-    // AXIsProcessTrusted is available without linking extra libs via a shell helper
-    let out = Command::new("osascript")
-        .arg("-e")
-        .arg(r#"tell application "System Events" to return (count of (every process whose frontmost is true)) >= 0"#)
-        .output();
-    match out {
-        Ok(o) => o.status.success(),
-        Err(_) => false,
-    }
+    unsafe { AXIsProcessTrusted() }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -35,11 +34,59 @@ pub fn request_accessibility() {
     }
 }
 
+// ── CoreGraphics screen capture APIs (macOS 10.15+) ──────────────────────────
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    /// Returns true if this process already has screen capture permission.
+    /// Does NOT prompt the user.
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    /// Requests screen capture permission. On macOS 13+ this opens System Settings
+    /// and adds the app to the Screen Recording list. Returns true if granted.
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+/// Check screen recording permission using the official CoreGraphics API.
+/// Works correctly with SIP enabled — no TCC database access needed.
+#[cfg(target_os = "macos")]
+pub fn check_screen_recording() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn check_screen_recording() -> bool {
+    true
+}
+
+/// Request screen recording permission via CGRequestScreenCaptureAccess().
+/// This automatically adds the app to the Screen Recording list in System Settings.
+/// Always opens System Settings afterwards so the user can toggle it on.
 pub fn request_screen_recording() {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-            .spawn();
+        // Register the app in the Screen Recording list. Ignore the return value —
+        // even if it returns false (already denied / needs toggle), we still open
+        // System Settings so the user can turn it on.
+        let _ = unsafe { CGRequestScreenCaptureAccess() };
+
+        // Always navigate to the Screen Recording pane.
+        // Try the macOS 13+ URL first; if that fails, fall back to the legacy URL.
+        let opened = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !opened {
+            let _ = std::process::Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                .spawn();
+        }
     }
+}
+
+pub fn check_notifications() -> bool {
+    crate::db::get_setting("notifications_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false)
 }

@@ -186,6 +186,11 @@ fn request_accessibility() {
 }
 
 #[tauri::command]
+fn check_screen_recording() -> bool {
+    permissions::check_screen_recording()
+}
+
+#[tauri::command]
 fn request_screen_recording() {
     permissions::request_screen_recording()
 }
@@ -270,6 +275,32 @@ fn open_url(url: String) {
     let _ = std::process::Command::new("cmd").args(["/c", "start", &url]).spawn();
 }
 
+// ─── File export ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn save_file(content: String, filename: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    let dir = {
+        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+        format!("{}/Downloads", home)
+    };
+    #[cfg(target_os = "windows")]
+    let dir = {
+        let profile = std::env::var("USERPROFILE").map_err(|e| e.to_string())?;
+        format!("{}\\Downloads", profile)
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let dir = return Err("Unsupported platform".to_string());
+
+    let path = format!("{}/{}", dir, filename);
+    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer").args(["/select,", &path]).spawn();
+    Ok(path)
+}
+
 // ─── App entry ──────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -334,6 +365,7 @@ pub fn run() {
             get_os,
             check_accessibility,
             request_accessibility,
+            check_screen_recording,
             request_screen_recording,
             start_tracking,
             open_url,
@@ -345,6 +377,7 @@ pub fn run() {
             set_rules_override,
             request_notification_permission,
             get_notifications_enabled,
+            save_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
