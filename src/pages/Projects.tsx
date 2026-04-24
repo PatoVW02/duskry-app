@@ -1,10 +1,13 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { format, fromUnixTime, isToday } from 'date-fns';
 import { useProjectStore } from '../stores/useProjectStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
+import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { PROJECT_COLORS } from '../styles/tokens';
-import { Plus, ChevronDown, ChevronRight, X, Lock, Target } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, X, Target } from 'lucide-react';
 import { Select } from '../components/ui/Select';
+import { formatDuration } from '../lib/utils';
 
 interface Rule {
   id: number;
@@ -37,6 +40,23 @@ type SerializableRuleNode =
 interface CompoundRuleValue {
   combinator: 'and' | 'or';
   conditions: RuleNode[];
+}
+
+interface ActivityGroup {
+  key: string;
+  label: string;
+  activities: Activity[];
+  total_s: number;
+  started_at: number;
+}
+
+interface AppActivityGroup {
+  key: string;
+  appName: string;
+  groups: ActivityGroup[];
+  activities: Activity[];
+  total_s: number;
+  started_at: number;
 }
 
 const FIELD_OPTIONS = [
@@ -157,10 +177,68 @@ function ruleNodeKey(node: RuleNode, index: number) {
     : `${node.field}-${node.operator}-${node.value}-${index}`;
 }
 
+function displayAppName(name: string): string {
+  if (!name) return name;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function activitySubtitle(activity: Activity): string {
+  return activity.domain ?? activity.file_path ?? activity.window_title ?? 'No context';
+}
+
+function activityGroupLabel(activity: Activity): string {
+  return activity.domain ?? activity.window_title?.trim() ?? activity.file_path ?? 'No context';
+}
+
+function buildActivityGroups(activities: Activity[]): AppActivityGroup[] {
+  const byApp = new Map<string, Activity[]>();
+  for (const activity of activities) {
+    const list = byApp.get(activity.app_name) ?? [];
+    list.push(activity);
+    byApp.set(activity.app_name, list);
+  }
+
+  return Array.from(byApp.entries())
+    .map(([appName, appActivities]) => {
+      const byContext = new Map<string, Activity[]>();
+      for (const activity of appActivities) {
+        const label = activityGroupLabel(activity);
+        const list = byContext.get(label) ?? [];
+        list.push(activity);
+        byContext.set(label, list);
+      }
+      const groups = Array.from(byContext.entries())
+        .map(([label, items]) => {
+          const sorted = [...items].sort((a, b) => b.started_at - a.started_at);
+          return {
+            key: `${appName}::${label}`,
+            label,
+            activities: sorted,
+            total_s: sorted.reduce((sum, activity) => sum + (activity.duration_s ?? 0), 0),
+            started_at: Math.min(...sorted.map((activity) => activity.started_at)),
+          };
+        })
+        .sort((a, b) => b.total_s - a.total_s || b.started_at - a.started_at);
+      const sortedActivities = [...appActivities].sort((a, b) => b.started_at - a.started_at);
+      return {
+        key: appName,
+        appName,
+        groups,
+        activities: sortedActivities,
+        total_s: sortedActivities.reduce((sum, activity) => sum + (activity.duration_s ?? 0), 0),
+        started_at: Math.min(...sortedActivities.map((activity) => activity.started_at)),
+      };
+    })
+    .sort((a, b) => b.total_s - a.total_s || b.started_at - a.started_at);
+}
+
 export function Projects() {
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
   const { activeProjectId, setActiveProject } = useSettingsStore();
+  const activities = useActivityStore((s) => s.activities);
+  const viewDate = useActivityStore((s) => s.viewDate);
+  const fetchForDate = useActivityStore((s) => s.fetchForDate);
 
   const activeProject = projects.find((p) => (p.id as number) === activeProjectId) ?? null;
 
@@ -172,6 +250,8 @@ export function Projects() {
 
   // ── rules management ──────────────────────────────
   const [expandedId, setExpandedId]     = useState<number | null>(null);
+  const [expandedActivitiesId, setExpandedActivitiesId] = useState<number | null>(null);
+  const [expandedActivityGroups, setExpandedActivityGroups] = useState<Set<string>>(() => new Set());
   const [projectRules, setProjectRules] = useState<Record<number, Rule[]>>({});
   const [addingRuleFor, setAddingRuleFor] = useState<number | null>(null);
   const [ruleCombinator, setRuleCombinator] = useState<'and' | 'or'>('and');
@@ -187,6 +267,14 @@ export function Projects() {
   const [applyToDate, setApplyToDate]   = useState('');
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyResult, setApplyResult]   = useState<number | null>(null);
+
+  useEffect(() => {
+    fetchForDate(viewDate);
+    if (isToday(viewDate)) {
+      const id = setInterval(() => fetchForDate(viewDate), 10_000);
+      return () => clearInterval(id);
+    }
+  }, [viewDate, fetchForDate]);
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -330,6 +418,18 @@ export function Projects() {
   const handleDeleteRule = async (ruleId: number, projectId: number) => {
     await invoke('delete_rule', { ruleId });
     await loadRules(projectId);
+  };
+
+  const toggleActivities = (projectId: number) => {
+    setExpandedActivitiesId((id) => id === projectId ? null : projectId);
+  };
+
+  const toggleActivityGroup = (key: string) => {
+    setExpandedActivityGroups((groups) => {
+      const next = new Set(groups);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
   };
 
   const renderRuleNodeDisplay = (node: RuleNode, index: number, combinator: 'and' | 'or', depth = 0): ReactNode => {
@@ -534,40 +634,6 @@ export function Projects() {
         )}
       </div>
 
-      {/* ── System rules ─────────────────────────────── */}
-      <div className="glass-card" style={{ padding: '16px 20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12 }}>
-          <Lock size={12} style={{ color: 'rgba(45,212,191,0.65)', flexShrink: 0 }} />
-          <span style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.40)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            System rules
-          </span>
-        </div>
-        <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: 12,
-          padding: '11px 14px', borderRadius: 8,
-          background: 'rgba(45,212,191,0.05)',
-          border: '0.5px solid rgba(45,212,191,0.15)',
-        }}>
-          <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>⏸</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 3 }}>Idle timeout</div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.55 }}>
-              After <strong style={{ color: 'rgba(255,255,255,0.70)' }}>5 minutes</strong> of no keyboard or mouse
-              input, the current activity is automatically paused. Tracking resumes the moment you return.
-              Meetings and video playback are detected automatically and never interrupted.
-            </div>
-          </div>
-          <span style={{
-            flexShrink: 0, fontSize: 10.5, fontWeight: 500,
-            padding: '2px 8px', borderRadius: 999,
-            background: 'rgba(45,212,191,0.10)', color: 'rgba(45,212,191,0.65)',
-            border: '0.5px solid rgba(45,212,191,0.18)',
-          }}>
-            built-in
-          </span>
-        </div>
-      </div>
-
       {/* ── Projects ──────────────────────────────────── */}
       <div className="glass-card" style={{ padding: '20px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
@@ -620,26 +686,51 @@ export function Projects() {
             {projects.map((p) => {
               const pid = p.id as number;
               const isExpanded = expandedId === pid;
+              const activitiesOpen = expandedActivitiesId === pid;
               const rules = projectRules[pid] ?? [];
+              const assignedActivities = activities
+                .filter((activity) => activity.project_id === pid)
+                .sort((a, b) => b.started_at - a.started_at);
+              const activityGroups = buildActivityGroups(assignedActivities);
+              const projectTotalSecs = assignedActivities.reduce((sum, activity) => sum + (activity.duration_s ?? 0), 0);
 
               return (
                 <div key={pid} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.06)' }}>
                   {/* project row */}
-                  <div className="project-row" style={{ padding: '11px 0', borderBottom: 'none' }}>
+                  <div
+                    className={`project-row project-page-row${activitiesOpen ? ' is-open' : ''}`}
+                    onClick={() => toggleActivities(pid)}
+                    style={{
+                      padding: '11px 0',
+                      borderBottom: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {activitiesOpen ? (
+                      <ChevronDown size={13} style={{ color: 'rgba(255,255,255,0.30)', flexShrink: 0 }} />
+                    ) : (
+                      <ChevronRight size={13} style={{ color: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
+                    )}
                     <span className="project-dot" style={{ background: p.color, width: 10, height: 10 }} />
                     <span style={{ fontSize: 13.5, flex: 1 }}>{p.name}</span>
+                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', marginRight: 6 }}>
+                      {assignedActivities.length} activit{assignedActivities.length === 1 ? 'y' : 'ies'}
+                    </span>
+                    {projectTotalSecs > 0 && (
+                      <span style={{ fontSize: 11, color: p.color, fontVariantNumeric: 'tabular-nums', marginRight: 8 }}>
+                        {formatDuration(projectTotalSecs)}
+                      </span>
+                    )}
                     {isExpanded && rules.length > 0 && (
                       <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', marginRight: 6 }}>
                         {rules.length} rule{rules.length !== 1 ? 's' : ''}
                       </span>
                     )}
                     <button
-                      onClick={() => toggleExpand(pid)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 4,
-                        background: 'none', border: 'none', cursor: 'pointer',
-                        color: isExpanded ? 'rgba(45,212,191,0.70)' : 'rgba(255,255,255,0.30)',
-                        fontSize: 11.5, padding: '2px 4px',
+                      className={`project-rules-button${isExpanded ? ' is-open' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleExpand(pid);
                       }}
                     >
                       {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -842,6 +933,183 @@ export function Projects() {
                       )}
                     </div>
                   )}
+
+                  {/* assigned activities panel */}
+                  {activitiesOpen && (
+                    <div style={{
+                      marginLeft: 20,
+                      marginBottom: 12,
+                      borderLeft: `2px solid ${p.color}30`,
+                      paddingLeft: 14,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                    }}>
+                      {assignedActivities.length === 0 ? (
+                        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.28)', padding: '4px 0 8px' }}>
+                          No activities assigned to this project for this day.
+                        </div>
+                      ) : (
+                        activityGroups.map((appGroup) => {
+                          const appGroupKey = `${pid}::app::${appGroup.key}`;
+                          const appGroupOpen = expandedActivityGroups.has(appGroupKey);
+                          return (
+                            <div key={appGroupKey} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.05)' }}>
+                              <div
+                                onClick={() => toggleActivityGroup(appGroupKey)}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 8,
+                                  padding: '7px 0',
+                                  minWidth: 0,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {appGroupOpen ? (
+                                  <ChevronDown size={12} style={{ color: 'rgba(255,255,255,0.32)', flexShrink: 0 }} />
+                                ) : (
+                                  <ChevronRight size={12} style={{ color: 'rgba(255,255,255,0.24)', flexShrink: 0 }} />
+                                )}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{
+                                    fontSize: 12.5,
+                                    fontWeight: 500,
+                                    color: 'rgba(255,255,255,0.78)',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}>
+                                    {displayAppName(appGroup.appName)}
+                                  </div>
+                                  <div style={{
+                                    fontSize: 11,
+                                    color: 'rgba(255,255,255,0.32)',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    marginTop: 1,
+                                  }}>
+                                    {appGroup.groups.length} context{appGroup.groups.length === 1 ? '' : 's'}
+                                  </div>
+                                </div>
+                                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', flexShrink: 0 }}>
+                                  {appGroup.activities.length} activit{appGroup.activities.length === 1 ? 'y' : 'ies'}
+                                </span>
+                                <span style={{
+                                  fontSize: 11,
+                                  color: 'rgba(255,255,255,0.38)',
+                                  fontVariantNumeric: 'tabular-nums',
+                                  flexShrink: 0,
+                                  minWidth: 54,
+                                  textAlign: 'right',
+                                }}>
+                                  {formatDuration(appGroup.total_s)}
+                                </span>
+                              </div>
+
+                              {appGroupOpen && (
+                                <div style={{ paddingLeft: 20, display: 'flex', flexDirection: 'column' }}>
+                                  {appGroup.groups.map((group) => {
+                                    const groupKey = `${pid}::ctx::${group.key}`;
+                                    const groupOpen = expandedActivityGroups.has(groupKey);
+                                    return (
+                                      <div key={groupKey} style={{ borderTop: '0.5px solid rgba(255,255,255,0.035)' }}>
+                                        <div
+                                          onClick={() => toggleActivityGroup(groupKey)}
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 8,
+                                            padding: '6px 0',
+                                            minWidth: 0,
+                                            cursor: 'pointer',
+                                          }}
+                                        >
+                                          {groupOpen ? (
+                                            <ChevronDown size={11} style={{ color: 'rgba(255,255,255,0.30)', flexShrink: 0 }} />
+                                          ) : (
+                                            <ChevronRight size={11} style={{ color: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
+                                          )}
+                                          <div style={{
+                                            flex: 1,
+                                            minWidth: 0,
+                                            fontSize: 11.5,
+                                            color: 'rgba(255,255,255,0.48)',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap',
+                                          }}>
+                                            {group.label}
+                                          </div>
+                                          <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.26)', flexShrink: 0 }}>
+                                            {group.activities.length}
+                                          </span>
+                                          <span style={{
+                                            fontSize: 10.5,
+                                            color: 'rgba(255,255,255,0.34)',
+                                            fontVariantNumeric: 'tabular-nums',
+                                            flexShrink: 0,
+                                            minWidth: 50,
+                                            textAlign: 'right',
+                                          }}>
+                                            {formatDuration(group.total_s)}
+                                          </span>
+                                        </div>
+
+                                        {groupOpen && group.activities.map((activity) => (
+                                          <div
+                                            key={activity.id}
+                                            style={{
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              gap: 10,
+                                              padding: '6px 0 6px 20px',
+                                              borderTop: '0.5px solid rgba(255,255,255,0.025)',
+                                              minWidth: 0,
+                                            }}
+                                          >
+                                            <span style={{
+                                              fontSize: 11,
+                                              color: 'rgba(255,255,255,0.30)',
+                                              width: 46,
+                                              flexShrink: 0,
+                                              fontVariantNumeric: 'tabular-nums',
+                                            }}>
+                                              {format(fromUnixTime(activity.started_at), 'HH:mm')}
+                                            </span>
+                                            <div style={{
+                                              flex: 1,
+                                              minWidth: 0,
+                                              fontSize: 11.5,
+                                              color: 'rgba(255,255,255,0.48)',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap',
+                                            }}>
+                                              {activitySubtitle(activity)}
+                                            </div>
+                                            <span style={{
+                                              fontSize: 11,
+                                              color: 'rgba(255,255,255,0.32)',
+                                              fontVariantNumeric: 'tabular-nums',
+                                              flexShrink: 0,
+                                            }}>
+                                              {formatDuration(activity.duration_s ?? 0)}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -849,7 +1117,6 @@ export function Projects() {
         )}
       </div>
     </div>
-
       {/* ── Rule-apply modal ─────────────────────────────── */}
       {ruleApplyModal && (
         <div

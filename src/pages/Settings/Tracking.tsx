@@ -75,6 +75,32 @@ export function Tracking() {
       }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+            Built-in system rules
+          </div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
+            Idle timeout is always available as a system rule. Meetings and video
+            playback are detected automatically and never interrupted.
+          </div>
+        </div>
+        <span style={{
+          flexShrink: 0, fontSize: 10.5, fontWeight: 500,
+          padding: '2px 8px', borderRadius: 999,
+          background: 'rgba(45,212,191,0.10)', color: 'rgba(45,212,191,0.65)',
+          border: '0.5px solid rgba(45,212,191,0.18)',
+        }}>
+          built-in
+        </span>
+      </div>
+
+      {/* Rules override */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 16,
+        paddingBottom: 16,
+        borderBottom: '0.5px solid rgba(255,255,255,0.07)',
+        marginBottom: 16,
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
             App &amp; URL rules override focus project
           </div>
           <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>

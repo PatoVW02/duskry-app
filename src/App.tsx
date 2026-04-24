@@ -111,7 +111,7 @@ function App() {
         <div className="main-area">
           <TopBar
             title={PAGE_TITLES[page]}
-            dateNav={page === 'overview' || page === 'activity' ? {
+            dateNav={page === 'overview' || page === 'activity' || page === 'projects' ? {
               viewDate,
               onPrev:  () => stepDate(-1),
               onNext:  () => stepDate(1),
