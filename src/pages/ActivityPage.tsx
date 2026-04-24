@@ -164,8 +164,9 @@ function unanimousProjectId(activityIds: number[], activities: Activity[]): numb
 
 // ── Timeline constants ─────────────────────────────────────────────────────
 
-const HOUR_HEIGHT = 56;
+const HOUR_HEIGHT = 88;
 const GUTTER      = 48;
+const MIN_TIMELINE_BLOCK_HEIGHT = 18;
 
 function formatHour(h: number): string {
   if (h === 0)  return '12am';
@@ -269,7 +270,7 @@ function EditModal({ onClose, children }: { onClose: () => void; children: React
 // ── Title group row (with hover edit/delete) ───────────────────────────────
 
 function TitleGroupRow({
-  tg, tpro, paddingLeft, pointerDragProps, expanded, onToggle, onEdit, onDelete,
+  tg, tpro, paddingLeft, pointerDragProps, expanded, onToggle, onEdit, onDelete, onHover, onHoverEnd,
 }: {
   tg: TitleGroup;
   tpro: Project | null;
@@ -279,6 +280,8 @@ function TitleGroupRow({
   onToggle?: () => void;
   onEdit?: () => void;
   onDelete: () => void;
+  onHover: () => void;
+  onHoverEnd: () => void;
 }) {
   const isExpandable = tg.activityIds.length > 1;
   const canEdit = Boolean(onEdit) && !isExpandable;
@@ -290,6 +293,8 @@ function TitleGroupRow({
     <div
       {...rowProps}
       className="activity-tree-row"
+      onMouseEnter={onHover}
+      onMouseLeave={onHoverEnd}
       style={{
         ...((rowProps.style as React.CSSProperties | undefined) ?? {}),
         paddingLeft,
@@ -336,7 +341,7 @@ function TitleGroupRow({
 }
 
 function ActivityLeafRow({
-  activity, project, paddingLeft, pointerDragProps, onEdit, onDelete,
+  activity, project, paddingLeft, pointerDragProps, onEdit, onDelete, onHover, onHoverEnd,
 }: {
   activity: Activity;
   project: Project | null;
@@ -344,6 +349,8 @@ function ActivityLeafRow({
   pointerDragProps: (ids: number[], options?: { onPress?: () => void }) => object;
   onEdit: () => void;
   onDelete: () => void;
+  onHover: () => void;
+  onHoverEnd: () => void;
 }) {
   const rowProps = pointerDragProps([activity.id], {
     onPress: onEdit,
@@ -353,6 +360,8 @@ function ActivityLeafRow({
     <div
       {...rowProps}
       className="activity-tree-row"
+      onMouseEnter={onHover}
+      onMouseLeave={onHoverEnd}
       style={{
         ...((rowProps.style as React.CSSProperties | undefined) ?? {}),
         paddingLeft,
@@ -425,6 +434,7 @@ export function ActivityPage() {
   const [expandedApps, setExpandedApps] = useState<Set<string>>(() => new Set());
   const [expandedCtx,  setExpandedCtx]  = useState<Set<string>>(() => new Set());
   const [expandedTitles, setExpandedTitles] = useState<Set<string>>(() => new Set());
+  const [hoveredActivityIds, setHoveredActivityIds] = useState<Set<number> | null>(null);
 
   // ── edit state ────────────────────────────────────────────────────────
   const [editingTarget, setEditingTarget] = useState<EditTarget | null>(null);
@@ -535,6 +545,8 @@ export function ActivityPage() {
     setExpandedCtx((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const toggleTitle = (key: string) =>
     setExpandedTitles((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  const highlightActivityIds = (ids: number[]) => setHoveredActivityIds(new Set(ids));
+  const clearActivityHighlight = () => setHoveredActivityIds(null);
 
   const handleDrop = useCallback(async (projectId: number, ids: number[]) => {
     if (projectId < 1 || ids.length === 0) return;
@@ -613,10 +625,10 @@ export function ActivityPage() {
   const showTimeline = isPro(tier);
 
   return (
-    <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', height: '100%' }}>
+    <div style={{ display: 'flex', gap: 14, alignItems: 'stretch', height: '100%', minHeight: 0, overflow: 'hidden' }}>
 
       {/* ── Left: activity tree ─────────────────────────────────────────── */}
-      <div style={{ flex: showTimeline ? '1 1 0' : '1', minWidth: 0, overflow: 'hidden' }}>
+      <div style={{ flex: showTimeline ? '1 1 0' : '1', minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
         <div
           className="glass-card"
           style={{
@@ -624,6 +636,12 @@ export function ActivityPage() {
             background: 'rgba(255,255,255,0.035)',
             border: '0.5px solid rgba(255,255,255,0.08)',
             minHeight: 160,
+            maxHeight: '100%',
+            minWidth: 0,
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
           }}
         >
           <div style={{
@@ -633,6 +651,7 @@ export function ActivityPage() {
             marginBottom: 10,
             padding: '2px 4px 8px',
             borderBottom: '0.5px solid rgba(255,255,255,0.06)',
+            flexShrink: 0,
           }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.68)', letterSpacing: '0.03em' }}>
               Activities
@@ -642,15 +661,16 @@ export function ActivityPage() {
             </span>
           </div>
 
-          {tree.length === 0 ? (
-            <div style={{
-              fontSize: 13, color: 'rgba(255,255,255,0.22)',
-              textAlign: 'center', paddingTop: 48,
-            }}>
-              No activity recorded yet
-            </div>
-          ) : (
-            tree.map((app) => {
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2 }}>
+            {tree.length === 0 ? (
+              <div style={{
+                fontSize: 13, color: 'rgba(255,255,255,0.22)',
+                textAlign: 'center', paddingTop: 48,
+              }}>
+                No activity recorded yet
+              </div>
+            ) : (
+              tree.map((app) => {
             const appOpen    = expandedApps.has(app.appName);
             const hasContext = app.contexts.some((c) => c.context !== '');
 
@@ -665,6 +685,8 @@ export function ActivityPage() {
                     <div
                       {...pointerDragProps(app.activityIds, { onPress: () => toggleApp(app.appName) })}
                       className="activity-tree-row"
+                      onMouseEnter={() => highlightActivityIds(app.activityIds)}
+                      onMouseLeave={clearActivityHighlight}
                       style={upro ? { borderLeft: `2.5px solid ${upro.color}88` } : undefined}
                     >
                       <span style={{
@@ -721,6 +743,8 @@ export function ActivityPage() {
                         <div
                           {...pointerDragProps(ctx.activityIds, { onPress: () => toggleCtx(ctxKey) })}
                           className="activity-tree-row"
+                          onMouseEnter={() => highlightActivityIds(ctx.activityIds)}
+                          onMouseLeave={clearActivityHighlight}
                           style={{ paddingLeft: 62 }}
                         >
                           <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center' }}>
@@ -777,6 +801,8 @@ export function ActivityPage() {
                               onToggle={tg.activityIds.length > 1 ? () => toggleTitle(titleKey) : undefined}
                               onEdit={editableActivity ? () => openEdit(editableActivity, tg.activityIds) : undefined}
                               onDelete={() => Promise.all(tg.activityIds.map((id) => deleteActivity(id)))}
+                              onHover={() => highlightActivityIds(tg.activityIds)}
+                              onHoverEnd={clearActivityHighlight}
                             />
                             {titleOpen && titleActivities.map((activity) => {
                               const apro = activity.project_id ? projects.find((p) => p.id === activity.project_id) ?? null : null;
@@ -789,6 +815,8 @@ export function ActivityPage() {
                                   pointerDragProps={pointerDragProps}
                                   onEdit={() => openEdit(activity)}
                                   onDelete={() => deleteActivity(activity.id)}
+                                  onHover={() => highlightActivityIds([activity.id])}
+                                  onHoverEnd={clearActivityHighlight}
                                 />
                               );
                             })}
@@ -801,14 +829,15 @@ export function ActivityPage() {
 
               </div>
             );
-            })
-          )}
+              })
+            )}
+          </div>
         </div>
       </div>
 
       {/* ── Right: timeline (Pro only) ──────────────────────────────────── */}
       {!showTimeline ? (
-        <div className="glass-card" style={{ width: 220, flexShrink: 0, padding: '28px 18px', textAlign: 'center' }}>
+        <div className="glass-card" style={{ width: 270, height: '100%', flexShrink: 0, padding: '28px 18px', textAlign: 'center' }}>
           <div style={{ fontSize: 22, marginBottom: 10 }}>📅</div>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Timeline</div>
           <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.38)', marginBottom: 16, lineHeight: 1.5 }}>
@@ -826,9 +855,9 @@ export function ActivityPage() {
         <div
           className="glass-card"
           style={{
-            width: 230, flexShrink: 0, padding: 0, overflow: 'hidden',
+            width: 360, height: '100%', flexShrink: 0, padding: 0, overflow: 'hidden',
             display: 'flex', flexDirection: 'column',
-            maxHeight: 'calc(100vh - 120px)',
+            maxHeight: '100%',
           }}
         >
           {/* Timeline header */}
@@ -865,9 +894,11 @@ export function ActivityPage() {
 
               {timelineBlocks.map((a) => {
                 const top    = Math.max(0, tsToY(a.started_at));
-                const height = Math.max(18, (a.duration_s! / 3600) * HOUR_HEIGHT);
+                const height = Math.max(MIN_TIMELINE_BLOCK_HEIGHT, (a.duration_s! / 3600) * HOUR_HEIGHT);
                 const proj   = projects.find((p) => p.id === a.project_id);
                 const color  = proj?.color ?? 'rgba(255,255,255,0.18)';
+                const isHighlighted = hoveredActivityIds?.has(a.id) ?? false;
+                const isDimmed = Boolean(hoveredActivityIds) && !isHighlighted;
 
                 return (
                   <div
@@ -877,10 +908,15 @@ export function ActivityPage() {
                     onMouseLeave={()  => setHovered(null)}
                     style={{
                       position: 'absolute', top, left: GUTTER + 6, right: 8,
-                      height, background: color, opacity: 0.82,
+                      zIndex: isHighlighted ? 3 : 1,
+                      height, background: color, opacity: isDimmed ? 0.28 : 0.88,
                       borderRadius: 4, cursor: 'default', overflow: 'hidden',
                       display: 'flex', flexDirection: 'column', justifyContent: 'center',
-                      padding: height > 22 ? '0 6px' : undefined,
+                      padding: '0 6px',
+                      outline: isHighlighted ? '2px solid rgba(255,255,255,0.88)' : 'none',
+                      outlineOffset: 1,
+                      boxShadow: isHighlighted ? '0 0 0 4px rgba(45,212,191,0.18), 0 8px 22px rgba(0,0,0,0.28)' : 'none',
+                      transition: 'opacity 0.12s, outline-color 0.12s, box-shadow 0.12s',
                     }}
                   >
                     {height > 20 && (

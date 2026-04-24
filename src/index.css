@@ -203,6 +203,11 @@ html, body, #root, #root * {
   padding: 8px 20px 20px;
 }
 
+.page-content--activity {
+  overflow: hidden;
+  min-height: 0;
+}
+
 /* ── Stats row ───────────────────────────────────────── */
 .stats-row {
   display: grid;

@@ -118,7 +118,7 @@ function App() {
               onToday: goToToday,
             } : undefined}
           />
-          <div className="page-content">
+          <div className={`page-content ${page === 'activity' ? 'page-content--activity' : ''}`}>
             {page === 'overview'  && <Overview />}
             {page === 'activity'  && <ActivityPage />}
             {page === 'projects'  && <Projects />}
