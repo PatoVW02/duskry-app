@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useLicenseStore, type SelectedPlan } from '../../stores/useLicenseStore';
 import { format, fromUnixTime } from 'date-fns';
 import { Check, ExternalLink } from 'lucide-react';
-import { openCheckout } from '../../lib/checkout';
+import { openCheckout, openAnnualCheckout } from '../../lib/checkout';
+import { usePricesStore } from '../../stores/usePricesStore';
+import { errorMessage } from '../../lib/utils';
 
 function openPortal() {
-  invoke('open_url', { url: 'https://app.lemonsqueezy.com/my-orders' });
+  invoke('open_url', { url: 'https://duskry.lemonsqueezy.com/billing' });
 }
 
 const PLAN_FEATURES: Record<SelectedPlan, string[]> = {
@@ -18,6 +20,9 @@ const PLAN_FEATURES: Record<SelectedPlan, string[]> = {
 const PLAN_LABEL: Record<SelectedPlan, string> = {
   free: 'Free', pro: 'Pro', proPlus: 'Pro+',
 };
+
+const TRIAL_DURATION_DAYS = 7;
+const TRIAL_DURATION_SECS = TRIAL_DURATION_DAYS * 24 * 60 * 60;
 
 type CellVal = string | boolean;
 const COMPARISON_ROWS: { label: string; free: CellVal; pro: CellVal; proPlus: CellVal }[] = [
@@ -33,16 +38,44 @@ const COMPARISON_ROWS: { label: string; free: CellVal; pro: CellVal; proPlus: Ce
 export function Billing() {
   const tier = useLicenseStore((s) => s.tier);
   const trialExpiresAt = useLicenseStore((s) => s.trialExpiresAt);
+  const trialStartedAt = useLicenseStore((s) => s.trialStartedAt);
   const trialEmail = useLicenseStore((s) => s.trialEmail);
   const selectedPlan = useLicenseStore((s) => s.selectedPlan);
   const daysRemaining = useLicenseStore((s) => s.daysRemaining());
   const activateLicense = useLicenseStore((s) => s.activateLicense);
+  const removeLicense = useLicenseStore((s) => s.removeLicense);
+  const cancelTrial = useLicenseStore((s) => s.cancelTrial);
+  const startTrial = useLicenseStore((s) => s.startTrial);
+  const setSelectedPlan = useLicenseStore((s) => s.setSelectedPlan);
+
+  const prices = usePricesStore((s) => s.prices);
 
   const [keyInput, setKeyInput] = useState('');
   const [keyError, setKeyError] = useState('');
   const [keyLoading, setKeyLoading] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const [billing, setBilling] = useState<'monthly' | 'yearly'>('monthly');
+  const [billing, setBilling] = useState<'monthly' | 'yearly'>('yearly');
+  const [cancelConfirm, setCancelConfirm] = useState(false);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [canDeactivateLicense, setCanDeactivateLicense] = useState<boolean | null>(null);
+  const [removeConfirm, setRemoveConfirm] = useState(false);
+  const [removeLoading, setRemoveLoading] = useState(false);
+  const [removeError, setRemoveError] = useState('');
+  const [trialPlan, setTrialPlan] = useState<'pro' | 'proPlus'>(
+    selectedPlan === 'proPlus' ? 'proPlus' : 'pro'
+  );
+  const [trialLoading, setTrialLoading] = useState(false);
+  const [trialError, setTrialError] = useState('');
+
+  useEffect(() => {
+    if (tier !== 'pro' && tier !== 'proPlus') {
+      setCanDeactivateLicense(null);
+      return;
+    }
+    invoke<boolean>('can_deactivate_license')
+      .then(setCanDeactivateLicense)
+      .catch(() => setCanDeactivateLicense(false));
+  }, [tier]);
 
   const handleActivate = async () => {
     if (!keyInput.trim()) return;
@@ -52,10 +85,55 @@ export function Billing() {
       await activateLicense(keyInput.trim());
       setShowKey(false);
       setKeyInput('');
-    } catch (e: any) {
-      setKeyError(e.message ?? 'Invalid license key');
+    } catch (e) {
+      setKeyError(errorMessage(e, 'Invalid license key'));
     } finally {
       setKeyLoading(false);
+    }
+  };
+
+  const handleCancelTrial = async () => {
+    setCancelLoading(true);
+    try {
+      await cancelTrial();
+    } finally {
+      setCancelLoading(false);
+      setCancelConfirm(false);
+    }
+  };
+
+  const handleCheckout = (plan: 'pro' | 'proPlus', period: 'monthly' | 'yearly') => {
+    if (period === 'yearly') {
+      openAnnualCheckout(plan === 'proPlus' ? 'proplus_yearly' : 'pro_yearly', trialEmail || undefined);
+    } else {
+      openCheckout(plan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly', trialEmail || undefined);
+    }
+  };
+
+  const handleRemoveLicense = async () => {
+    setRemoveLoading(true);
+    setRemoveError('');
+    try {
+      await removeLicense();
+    } catch (e) {
+      setRemoveError(errorMessage(e, 'Could not remove license. Please try again.'));
+    } finally {
+      setRemoveLoading(false);
+      setRemoveConfirm(false);
+    }
+  };
+
+  const handleStartFreeTrial = async () => {
+    setTrialLoading(true);
+    setTrialError('');
+    try {
+      await setSelectedPlan(trialPlan);
+      const expiresAt = Math.floor(Date.now() / 1000) + TRIAL_DURATION_SECS;
+      await startTrial(trialEmail, expiresAt);
+    } catch (e) {
+      setTrialError(errorMessage(e, 'Could not start free trial.'));
+    } finally {
+      setTrialLoading(false);
     }
   };
 
@@ -107,20 +185,69 @@ export function Billing() {
           <SectionLabel>Manage subscription</SectionLabel>
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <ActionRow
-              label="Billing portal"
-              description="View invoices, update payment method, cancel subscription"
-              buttonLabel="Open billing portal"
+              label="Change plan or billing period"
+              description="Switch Pro/Pro+, monthly/annual, or manage proration in Lemon Squeezy"
+              buttonLabel="Open portal"
+              onAction={openPortal}
+              icon={<ExternalLink size={11} />}
+              highlight
+            />
+            <ActionRow
+              label="Payment, invoices, or cancellation"
+              description="Update payment method, view billing history, pause, resume, or cancel"
+              buttonLabel="Open portal"
               onAction={openPortal}
               icon={<ExternalLink size={11} />}
             />
-            {tier === 'pro' && (
-              <ActionRow
-                label="Upgrade to Pro+"
-                description="Unlimited history, team sharing, priority support"
-                buttonLabel="Upgrade →"
-                onAction={() => openCheckout('proplus_monthly')}
-                highlight
-              />
+          </div>
+        </div>
+
+        {/* Local license */}
+        <div className="glass-card" style={{ padding: '20px 22px' }}>
+          <SectionLabel>License on this device</SectionLabel>
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>
+              {canDeactivateLicense === false
+                ? 'This app was activated before device deactivation tracking was added. Removing it clears the local license, but cannot release the Lemon Squeezy activation for this device.'
+                : 'Remove this license from the app and release this device activation in Lemon Squeezy.'}
+            </div>
+            {removeError && <div style={{ fontSize: 12, color: '#f87171' }}>{removeError}</div>}
+            {!removeConfirm ? (
+              <button
+                className="billing-button billing-button-danger"
+                onClick={() => setRemoveConfirm(true)}
+                style={{
+                  alignSelf: 'flex-start', padding: '6px 12px', borderRadius: 6,
+                  border: '0.5px solid rgba(239,68,68,0.35)',
+                  background: 'rgba(239,68,68,0.08)', color: 'rgba(248,113,113,0.85)',
+                  fontSize: 12, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                }}
+              >
+                Remove license from this app
+              </button>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>Remove the license from this device?</span>
+                <button
+                  className="billing-button billing-button-danger"
+                  onClick={handleRemoveLicense}
+                  disabled={removeLoading}
+                  style={{
+                    padding: '3px 10px', borderRadius: 5, border: '0.5px solid rgba(239,68,68,0.35)',
+                    background: 'rgba(239,68,68,0.10)', color: 'rgba(239,68,68,0.80)',
+                    fontSize: 11.5, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                  }}
+                >
+                  {removeLoading ? 'Removing…' : 'Yes, remove'}
+                </button>
+                <button
+                  className="billing-button billing-button-ghost"
+                  onClick={() => setRemoveConfirm(false)}
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: 'rgba(255,255,255,0.35)' }}
+                >
+                  Keep license
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -147,7 +274,7 @@ export function Billing() {
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16,
             }}>⏱</div>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>{planLabel} - Free Trial</div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>{planLabel} (Free Trial)</div>
               <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.40)', marginTop: 2 }}>
                 {trialEmail && <>Registered as <strong style={{ color: 'rgba(255,255,255,0.55)' }}>{trialEmail}</strong> · </>}
                 Expires {expiresFormatted}
@@ -161,15 +288,51 @@ export function Billing() {
               {daysRemaining}d left
             </span>
           </div>
+
+          {/* Cancel trial */}
+          <div style={{ marginTop: 14, borderTop: '0.5px solid rgba(255,255,255,0.06)', paddingTop: 12 }}>
+            {!cancelConfirm ? (
+              <button
+                className="billing-button billing-button-ghost"
+                onClick={() => setCancelConfirm(true)}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: 'rgba(255,255,255,0.28)' }}
+              >
+                Cancel trial
+              </button>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>Cancel trial and lose access?</span>
+                <button
+                  className="billing-button billing-button-danger"
+                  onClick={handleCancelTrial}
+                  disabled={cancelLoading}
+                  style={{
+                    padding: '3px 10px', borderRadius: 5, border: '0.5px solid rgba(239,68,68,0.35)',
+                    background: 'rgba(239,68,68,0.10)', color: 'rgba(239,68,68,0.80)',
+                    fontSize: 11.5, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                  }}
+                >
+                  {cancelLoading ? 'Cancelling…' : 'Yes, cancel'}
+                </button>
+                <button
+                  className="billing-button billing-button-ghost"
+                  onClick={() => setCancelConfirm(false)}
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: 'rgba(255,255,255,0.35)' }}
+                >
+                  Keep trial
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Plan comparison + subscribe - all 3 plans so the trial value is clear */}
+        {/* Plan comparison + subscribe */}
         <div className="glass-card" style={{ padding: '20px 22px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <SectionLabel>Compare plans</SectionLabel>
             <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: 7, padding: 2 }}>
               {(['monthly', 'yearly'] as const).map((b) => (
-                <button key={b} onClick={() => setBilling(b)} style={{
+                <button key={b} className="billing-button" onClick={() => setBilling(b)} style={{
                   padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer',
                   fontSize: 11, fontFamily: 'Inter, sans-serif', fontWeight: billing === b ? 500 : 400,
                   background: billing === b ? 'rgba(45,212,191,0.16)' : 'transparent',
@@ -188,7 +351,7 @@ export function Billing() {
             {[
               { name: 'Free', sub: 'not active', dim: true, teal: false },
               { name: planLabel, sub: 'your trial', dim: false, teal: true },
-              { name: 'Pro+', sub: billing === 'monthly' ? '$9.99/mo' : '$6.66/mo', dim: false, teal: false },
+              { name: 'Pro+', sub: billing === 'monthly' ? `${prices.proplus_monthly}/mo` : `${prices.proplus_yearly}/yr`, dim: false, teal: false },
             ].map((col) => (
               <div key={col.name} style={{ textAlign: 'center', paddingBottom: 6 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: col.teal ? 'rgba(45,212,191,0.85)' : col.dim ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.70)' }}>
@@ -222,26 +385,59 @@ export function Billing() {
             <div />
             <div />
             <button
-              className="btn-primary"
-              onClick={() => openCheckout(billing === 'monthly'
-                ? (planKey === 'proPlus' ? 'proplus_monthly' : 'pro_monthly')
-                : (planKey === 'proPlus' ? 'proplus_yearly' : 'pro_yearly')
-              )}
+              className="btn-primary billing-button"
+              onClick={() => handleCheckout(planKey === 'proPlus' ? 'proPlus' : 'pro', billing)}
               style={{ fontSize: 11.5, padding: '6px 0' }}
             >
               Subscribe →
             </button>
-            <button
-              onClick={() => openCheckout(billing === 'monthly' ? 'proplus_monthly' : 'proplus_yearly')}
-              style={{
-                padding: '6px 0', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.15)',
-                background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.65)',
-                fontSize: 11.5, fontWeight: 500, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
-              }}
-            >
-              Upgrade →
-            </button>
+            {planKey === 'pro' ? (
+              <button
+                className="billing-button"
+                onClick={() => handleCheckout('proPlus', billing)}
+                style={{
+                  padding: '6px 0', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.15)',
+                  background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.65)',
+                  fontSize: 11.5, fontWeight: 500, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                }}
+              >
+                Upgrade →
+              </button>
+            ) : <div />}
           </div>
+        </div>
+
+        {/* License key entry — available during trial so users can activate immediately after purchase */}
+        <div className="glass-card" style={{ padding: '20px 22px' }}>
+          <SectionLabel>Already purchased?</SectionLabel>
+          {!showKey ? (
+            <button
+              className="billing-button billing-button-link"
+              style={{ marginTop: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12.5, color: 'rgba(45,212,191,0.70)' }}
+              onClick={() => setShowKey(true)}
+            >
+              Enter your license key →
+            </button>
+          ) : (
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <input
+                className="glass-input"
+                placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                autoFocus
+              />
+              {keyError && <div style={{ fontSize: 12, color: '#f87171' }}>{keyError}</div>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-primary billing-button" onClick={handleActivate} disabled={keyLoading || !keyInput.trim()} style={{ fontSize: 12.5 }}>
+                  {keyLoading ? 'Validating…' : 'Activate'}
+                </button>
+                <button className="btn-secondary billing-button" style={{ maxWidth: 90 }} onClick={() => { setShowKey(false); setKeyError(''); }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -250,6 +446,67 @@ export function Billing() {
   // ── Free / expired ──────────────────────────────────────────────────────
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {tier === 'free' && trialStartedAt <= 0 && (
+        <div className="glass-card" style={{ padding: '20px 22px' }}>
+          <SectionLabel>Free trial</SectionLabel>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: 10,
+              background: 'rgba(45,212,191,0.12)',
+              border: '0.5px solid rgba(45,212,191,0.28)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 13, fontWeight: 700, color: 'rgba(45,212,191,0.9)',
+            }}>
+              {TRIAL_DURATION_DAYS}d
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>Try {PLAN_LABEL[trialPlan]} free for {TRIAL_DURATION_DAYS} days</div>
+              <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.40)', marginTop: 2 }}>
+                Choose a plan for your one-time trial on this computer.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 16 }}>
+            {(['pro', 'proPlus'] as const).map((plan) => {
+              const active = trialPlan === plan;
+              return (
+                <button
+                  key={plan}
+                  className="billing-button"
+                  onClick={() => setTrialPlan(plan)}
+                  style={{
+                    textAlign: 'left',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    border: `0.5px solid ${active ? 'rgba(45,212,191,0.40)' : 'rgba(255,255,255,0.10)'}`,
+                    background: active ? 'rgba(45,212,191,0.10)' : 'rgba(255,255,255,0.04)',
+                    color: 'rgba(255,255,255,0.78)',
+                    fontFamily: 'Inter, sans-serif',
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{PLAN_LABEL[plan]}</div>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)' }}>
+                    {plan === 'pro' ? '90-day history, reports, auto-rules' : 'Unlimited history, team sharing, priority support'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {trialError && <div style={{ marginTop: 10, fontSize: 12, color: '#f87171' }}>{trialError}</div>}
+          <button
+            className="btn-primary billing-button"
+            onClick={handleStartFreeTrial}
+            disabled={trialLoading}
+            style={{ marginTop: 14, fontSize: 12.5 }}
+          >
+            {trialLoading ? 'Starting trial…' : `Start ${PLAN_LABEL[trialPlan]} free trial`}
+          </button>
+        </div>
+      )}
+
       {tier === 'expired' && (
         <div style={{
           padding: '12px 16px', borderRadius: 10,
@@ -269,6 +526,7 @@ export function Billing() {
             {(['monthly', 'yearly'] as const).map((b) => (
               <button
                 key={b}
+                className="billing-button"
                 onClick={() => setBilling(b)}
                 style={{
                   padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer',
@@ -304,9 +562,10 @@ export function Billing() {
               ) : (
                 <div style={{ fontSize: 11, fontWeight: 600, color: col.featured ? 'rgba(45,212,191,0.70)' : 'rgba(255,255,255,0.55)', marginTop: 1 }}>
                   {billing === 'monthly'
-                    ? (col.featured ? '$9.99' : '$5.99')
-                    : (col.featured ? '$6.66' : '$3.99')}
-                  <span style={{ fontSize: 9, fontWeight: 400, color: 'rgba(255,255,255,0.35)' }}>/mo</span>
+                    ? (col.featured ? prices.proplus_monthly : prices.pro_monthly)
+                    : (col.featured ? prices.proplus_yearly : prices.pro_yearly)}
+                  {billing === 'monthly' && <span style={{ fontSize: 9, fontWeight: 400, color: 'rgba(255,255,255,0.35)' }}>/mo</span>}
+                  {billing === 'yearly' && <span style={{ fontSize: 9, fontWeight: 400, color: 'rgba(255,255,255,0.35)' }}>/yr</span>}
                 </div>
               )}
             </div>
@@ -341,19 +600,21 @@ export function Billing() {
           </div>
           <div style={{ paddingRight: 4 }}>
             <button
-              onClick={() => openCheckout(billing === 'monthly' ? 'pro_monthly' : 'pro_yearly')}
+              className="billing-button"
+              onClick={() => handleCheckout('pro', billing)}
               style={{
                 width: '100%', padding: '5px 0', borderRadius: 6, border: '0.5px solid rgba(255,255,255,0.15)',
                 background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.70)',
                 fontSize: 11, fontWeight: 500, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
               }}
             >
-              Try free
+              Subscribe
             </button>
           </div>
           <div>
             <button
-              onClick={() => openCheckout(billing === 'monthly' ? 'proplus_monthly' : 'proplus_yearly')}
+              className="billing-button"
+              onClick={() => handleCheckout('proPlus', billing)}
               style={{
                 width: '100%', padding: '5px 0', borderRadius: 6,
                 border: '0.5px solid rgba(45,212,191,0.40)',
@@ -361,7 +622,7 @@ export function Billing() {
                 fontSize: 11, fontWeight: 500, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
               }}
             >
-              Try free
+              Subscribe
             </button>
           </div>
         </div>
@@ -372,6 +633,7 @@ export function Billing() {
         <SectionLabel>Activate license</SectionLabel>
         {!showKey ? (
           <button
+            className="billing-button billing-button-link"
             style={{
               marginTop: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer',
               fontSize: 12.5, color: 'rgba(45,212,191,0.70)',
@@ -391,10 +653,10 @@ export function Billing() {
             />
             {keyError && <div style={{ fontSize: 12, color: '#f87171' }}>{keyError}</div>}
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn-primary" onClick={handleActivate} disabled={keyLoading || !keyInput.trim()} style={{ fontSize: 12.5 }}>
+              <button className="btn-primary billing-button" onClick={handleActivate} disabled={keyLoading || !keyInput.trim()} style={{ fontSize: 12.5 }}>
                 {keyLoading ? 'Validating…' : 'Activate'}
               </button>
-              <button className="btn-secondary" style={{ maxWidth: 90 }} onClick={() => { setShowKey(false); setKeyError(''); }}>
+              <button className="btn-secondary billing-button" style={{ maxWidth: 90 }} onClick={() => { setShowKey(false); setKeyError(''); }}>
                 Cancel
               </button>
             </div>
@@ -457,6 +719,7 @@ function ActionRow({
         <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.40)' }}>{description}</div>
       </div>
       <button
+        className="billing-button"
         onClick={onAction}
         style={{
           display: 'flex', alignItems: 'center', gap: 5,

@@ -346,6 +346,7 @@ function ActivityRow({
   onDelete: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const proj = projects.find((p: Project) => p.id === a.project_id);
   const time = format(fromUnixTime(a.started_at), 'HH:mm');
   const projectOptions = projects.map((p: Project) => ({ value: String(p.id!), label: p.name }));
@@ -360,7 +361,7 @@ function ActivityRow({
         onEdit();
       }}
       onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseLeave={() => { setHovered(false); setConfirmDelete(false); }}
       style={{ position: 'relative', cursor: 'pointer', userSelect: 'text', WebkitUserSelect: 'text' }}
     >
       <div className="activity-app-icon">{displayAppName(a.app_name).charAt(0).toUpperCase()}</div>
@@ -402,18 +403,65 @@ function ActivityRow({
           </span>
         )}
         {hovered && (
-          <button
-            type="button"
-            data-no-edit="true"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            title="Delete"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,90,90,0.50)', padding: 2, display: 'flex', alignItems: 'center' }}
-          >
-            <Trash2 size={11} />
-          </button>
+          confirmDelete ? (
+            <div data-no-edit="true" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <button
+                type="button"
+                className="delete-confirm-button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+                style={{
+                  padding: '2px 7px', borderRadius: 5, cursor: 'pointer',
+                  border: '0.5px solid rgba(239,68,68,0.35)',
+                  background: 'rgba(239,68,68,0.10)', color: 'rgba(248,113,113,0.88)',
+                  fontSize: 10.5, fontFamily: 'Inter, sans-serif',
+                }}
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                className="cancel-confirm-button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDelete(false);
+                }}
+                style={{
+                  padding: '2px 6px', borderRadius: 5, cursor: 'pointer',
+                  border: '0.5px solid rgba(255,255,255,0.10)',
+                  background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.42)',
+                  fontSize: 10.5, fontFamily: 'Inter, sans-serif',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="icon-delete-button"
+              data-no-edit="true"
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirmDelete(true);
+              }}
+              title="Delete"
+              style={{
+                background: 'rgba(255,255,255,0.03)',
+                border: '0.5px solid rgba(255,255,255,0.08)',
+                borderRadius: 5,
+                cursor: 'pointer',
+                color: 'rgba(255,90,90,0.50)',
+                padding: 2,
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              <Trash2 size={11} />
+            </button>
+          )
         )}
       </div>
     </div>

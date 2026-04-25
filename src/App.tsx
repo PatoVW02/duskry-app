@@ -21,12 +21,14 @@ import { Overview } from './pages/Overview';
 import { ActivityPage } from './pages/ActivityPage';
 import { Projects } from './pages/Projects';
 import { Reports } from './pages/Reports';
-import { Settings } from './pages/Settings';
+import { Settings, type SettingsTab } from './pages/Settings';
 
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useLicenseStore } from './stores/useLicenseStore';
 import { useProjectStore } from './stores/useProjectStore';
 import { useActivityStore } from './stores/useActivityStore';
+import { usePricesStore } from './stores/usePricesStore';
+import { billingPlansEnabled } from './lib/featureFlags';
 
 type Page = 'overview' | 'activity' | 'projects' | 'reports' | 'settings';
 type OnboardingStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -41,6 +43,7 @@ const PAGE_TITLES: Record<Page, string> = {
 
 function App() {
   const [page, setPage] = useState<Page>('overview');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
   const [obStep, setObStep] = useState<OnboardingStep>(0);
   const updater = useUpdater();
   const updaterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,15 +52,34 @@ function App() {
   const { onboardingComplete, loadSettings } = useSettingsStore();
   const { tier, fetchTier } = useLicenseStore();
   const fetchProjects = useProjectStore((s) => s.fetchProjects);
+  const fetchPrices = usePricesStore((s) => s.fetchPrices);
   const viewDate = useActivityStore((s) => s.viewDate);
   const stepDate = useActivityStore((s) => s.stepDate);
   const goToToday = useActivityStore((s) => s.goToToday);
+
+  // History retention cutoff: free=7d, pro/trial=90d, proPlus=unlimited
+  const historyLimitDays = !billingPlansEnabled ? null : tier === 'proPlus' ? null : tier === 'pro' || tier === 'proTrial' ? 90 : 7;
+  const historyLimitDate = historyLimitDays
+    ? new Date(Date.now() - historyLimitDays * 24 * 60 * 60 * 1000)
+    : null;
+  const canGoBack = !historyLimitDate || viewDate > historyLimitDate;
+
+  const openBillingSettings = () => {
+    if (!billingPlansEnabled) {
+      setSettingsTab('appearance');
+      setPage('settings');
+      return;
+    }
+    setSettingsTab('billing');
+    setPage('settings');
+  };
 
   useEffect(() => {
     loadSettings();
     fetchTier();
     fetchProjects();
-  }, [loadSettings, fetchTier, fetchProjects]);
+    fetchPrices();
+  }, [loadSettings, fetchTier, fetchProjects, fetchPrices]);
 
   // Start tracking loop for returning users (new users start it in AllSetScreen)
   const prevOnboardingComplete = useRef(onboardingComplete);
@@ -88,7 +110,7 @@ function App() {
       case 0: return <WelcomeScreen onNext={next} />;
       case 1: return <PermissionsScreen onNext={next} />;
       case 2: return <NotificationsScreen onNext={next} />;
-      case 3: return <PlanPickerScreen onNext={next} />;
+      case 3: return billingPlansEnabled ? <PlanPickerScreen onNext={next} /> : <FirstProjectScreen onNext={() => setObStep(6)} />;
       case 4: return <TrialScreen onNext={next} />;
       case 5: return <FirstProjectScreen onNext={next} />;
       case 6: return <AllSetScreen onDone={() => {}} />;
@@ -96,7 +118,7 @@ function App() {
   }
 
   // ── Paywall ──────────────────────────────────────────────────
-  if (tier === 'expired') {
+  if (billingPlansEnabled && tier === 'expired') {
     return <PaywallModal />;
   }
 
@@ -111,19 +133,21 @@ function App() {
         <div className="main-area">
           <TopBar
             title={PAGE_TITLES[page]}
+            onUpgrade={openBillingSettings}
             dateNav={page === 'overview' || page === 'activity' || page === 'projects' ? {
               viewDate,
-              onPrev:  () => stepDate(-1),
+              onPrev:  canGoBack ? () => stepDate(-1) : undefined,
               onNext:  () => stepDate(1),
               onToday: goToToday,
+              historyLocked: !canGoBack,
             } : undefined}
           />
           <div className={`page-content ${page === 'activity' ? 'page-content--activity' : ''}`}>
             {page === 'overview'  && <Overview />}
-            {page === 'activity'  && <ActivityPage />}
-            {page === 'projects'  && <Projects />}
-            {page === 'reports'   && <Reports />}
-            {page === 'settings'  && <Settings />}
+            {page === 'activity'  && <ActivityPage onUpgrade={openBillingSettings} />}
+            {page === 'projects'  && <Projects onUpgrade={openBillingSettings} />}
+            {page === 'reports'   && <Reports onUpgrade={openBillingSettings} />}
+            {page === 'settings'  && <Settings activeTab={settingsTab} onTabChange={setSettingsTab} onUpgrade={openBillingSettings} />}
           </div>
         </div>
       </div>

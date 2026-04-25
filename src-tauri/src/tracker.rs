@@ -158,6 +158,24 @@ fn start_tracking_worker() {
         return;
     }
     crate::logger::tlog("Tracking loop starting");
+    let now = Utc::now().timestamp();
+    let prev_id = CURRENT_ACTIVITY_ID.swap(0, Ordering::SeqCst);
+    if prev_id > 0 {
+        let _ = crate::db::finish_activity(prev_id, now);
+        crate::logger::tlog(&format!(
+            "  Finished stale activity #{} before tracker start",
+            prev_id
+        ));
+    }
+    match crate::db::close_open_activities(now) {
+        Ok(count) if count > 0 => crate::logger::tlog(&format!(
+            "  Repaired {} open activit{} before tracker start",
+            count,
+            if count == 1 { "y" } else { "ies" }
+        )),
+        Ok(_) => {}
+        Err(e) => crate::logger::tlog(&format!("  Failed to repair open activities: {}", e)),
+    }
     TRACKER_HEARTBEAT_TS.store(Utc::now().timestamp(), Ordering::SeqCst);
     let generation = WORKER_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
@@ -474,9 +492,17 @@ pub fn get_current_window() -> Option<ActiveWindow> {
 ///       1. Focus project (always wins)
 /// When no focus project is set, normal full-rules matching applies.
 fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option<i64> {
+    let tier = crate::license::get_effective_tier();
+    let rules_locked = crate::feature_flags::billing_plans_enabled()
+        && (tier == crate::license::AppTier::Free || tier == crate::license::AppTier::Expired);
+
     let active_pid = ACTIVE_PROJECT_ID.load(Ordering::SeqCst);
 
     if active_pid > 0 {
+        // Free/Expired: rules don't apply, focus project always wins
+        if rules_locked {
+            return Some(active_pid);
+        }
         let rules_override = crate::db::get_setting("rules_override_active_project")
             .map(|v| v == "true")
             .unwrap_or(true); // default ON
@@ -490,7 +516,10 @@ fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option
         return Some(active_pid);
     }
 
-    // No focus project → use all rules normally
+    // No focus project → rules normally (skipped on free/expired)
+    if rules_locked {
+        return None;
+    }
     crate::rules::apply_rules(window, rules)
 }
 

@@ -5,7 +5,7 @@ import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { formatDuration } from '../lib/utils';
-import { openCheckout } from '../lib/checkout';
+import { CalendarDays } from 'lucide-react';
 
 const HOUR_HEIGHT = 60; // px per hour
 const GUTTER      = 54; // px width for hour labels
@@ -69,14 +69,13 @@ function Tooltip({ activity, project, pos }: { activity: Activity; project?: Pro
   );
 }
 
-export function TimelinePage() {
+export function TimelinePage({ onUpgrade }: { onUpgrade: () => void }) {
   const tier = useLicenseStore((s) => s.tier);
-  const selectedPlan = useLicenseStore((s) => s.selectedPlan);
 
   if (!isPro(tier)) {
     return (
       <div className="glass-card" style={{ padding: '40px', textAlign: 'center' }}>
-        <div style={{ fontSize: 28, marginBottom: 16 }}>📅</div>
+        <CalendarDays size={30} strokeWidth={1.7} style={{ color: 'rgba(45,212,191,0.78)', margin: '0 auto 16px' }} />
         <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 8 }}>Full timeline is a Pro feature</div>
         <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', marginBottom: 24, maxWidth: 400, margin: '0 auto 24px' }}>
           Upgrade to Pro to see a full day-by-day timeline, navigate past days, and explore your complete activity history.
@@ -84,7 +83,7 @@ export function TimelinePage() {
         <button
           className="btn-primary"
           style={{ maxWidth: 200, margin: '0 auto' }}
-          onClick={() => openCheckout(selectedPlan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly')}
+          onClick={onUpgrade}
         >
           Upgrade to Pro →
         </button>

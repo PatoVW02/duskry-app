@@ -4,8 +4,9 @@ import { format, fromUnixTime, isToday } from 'date-fns';
 import { useProjectStore } from '../stores/useProjectStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useActivityStore, type Activity } from '../stores/useActivityStore';
+import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { PROJECT_COLORS } from '../styles/tokens';
-import { Plus, ChevronDown, ChevronRight, X, Target } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, X, Target, Lock, Trash2 } from 'lucide-react';
 import { Select } from '../components/ui/Select';
 import { formatDuration } from '../lib/utils';
 
@@ -232,15 +233,32 @@ function buildActivityGroups(activities: Activity[]): AppActivityGroup[] {
     .sort((a, b) => b.total_s - a.total_s || b.started_at - a.started_at);
 }
 
-export function Projects() {
+export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
+  const deleteProject = useProjectStore((s) => s.deleteProject);
   const { activeProjectId, setActiveProject } = useSettingsStore();
+  const { tier } = useLicenseStore();
   const activities = useActivityStore((s) => s.activities);
   const viewDate = useActivityStore((s) => s.viewDate);
   const fetchForDate = useActivityStore((s) => s.fetchForDate);
 
   const activeProject = projects.find((p) => (p.id as number) === activeProjectId) ?? null;
+
+  // Projects beyond the free-tier limit (3) are locked — oldest 3 stay active.
+  const lockedProjectIds = (() => {
+    if (isPro(tier)) return new Set<number>();
+    const sorted = [...projects].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+    return new Set(sorted.slice(3).map((p) => p.id as number));
+  })();
+
+  // Clear active focus project if it became locked after a downgrade.
+  useEffect(() => {
+    if (activeProjectId && lockedProjectIds.has(activeProjectId)) {
+      setActiveProject(0);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier, activeProjectId]);
 
   // ── project creation ───────────────────────────────
   const [showForm, setShowForm]   = useState(false);
@@ -257,6 +275,8 @@ export function Projects() {
   const [ruleCombinator, setRuleCombinator] = useState<'and' | 'or'>('and');
   const [ruleNodes, setRuleNodes] = useState<RuleNode[]>(() => [emptyCondition()]);
   const [savingRule, setSavingRule]     = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
 
   // ── rule-apply modal ──────────────────────────────
   const [ruleApplyModal, setRuleApplyModal] = useState<{
@@ -284,6 +304,25 @@ export function Projects() {
     setColor(PROJECT_COLORS[0]);
     setShowForm(false);
     setCreating(false);
+  };
+
+  const handleDeleteProject = async (projectId: number) => {
+    setDeletingProjectId(projectId);
+    try {
+      await deleteProject(projectId);
+      if (activeProjectId === projectId) await setActiveProject(0);
+      if (expandedId === projectId) setExpandedId(null);
+      if (expandedActivitiesId === projectId) setExpandedActivitiesId(null);
+      setProjectRules((rules) => {
+        const next = { ...rules };
+        delete next[projectId];
+        return next;
+      });
+      await fetchForDate(viewDate);
+    } finally {
+      setDeletingProjectId(null);
+      setDeleteConfirmId(null);
+    }
   };
 
   const loadRules = async (projectId: number) => {
@@ -608,7 +647,9 @@ export function Projects() {
         {/* Project selector pills */}
         {projects.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {projects.map((p) => {
+            {projects
+              .filter((p) => !lockedProjectIds.has(p.id as number))
+              .map((p) => {
               const pid = p.id as number;
               const isActive = pid === activeProjectId;
               return (
@@ -637,12 +678,35 @@ export function Projects() {
       {/* ── Projects ──────────────────────────────────── */}
       <div className="glass-card" style={{ padding: '20px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 500 }}>Projects</div>
-          <button className="btn-primary" style={{ width: 'auto', padding: '6px 14px', fontSize: 12 }}
-            onClick={() => setShowForm(!showForm)}>
-            <Plus size={12} style={{ display: 'inline', marginRight: 5 }} />
-            New project
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ fontSize: 15, fontWeight: 500 }}>Projects</div>
+            {!isPro(tier) && (
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>
+                {projects.length - lockedProjectIds.size}/3
+              </span>
+            )}
+          </div>
+          {!isPro(tier) && projects.length >= 3 ? (
+            <button
+              onClick={onUpgrade}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+                border: '0.5px solid rgba(45,212,191,0.35)',
+                background: 'rgba(45,212,191,0.08)', color: 'rgba(45,212,191,0.85)',
+                fontSize: 12, fontFamily: 'Inter, sans-serif',
+              }}
+            >
+              <Lock size={11} />
+              Upgrade for unlimited
+            </button>
+          ) : (
+            <button className="btn-primary" style={{ width: 'auto', padding: '6px 14px', fontSize: 12 }}
+              onClick={() => setShowForm(!showForm)}>
+              <Plus size={12} style={{ display: 'inline', marginRight: 5 }} />
+              New project
+            </button>
+          )}
         </div>
 
         {showForm && (
@@ -685,6 +749,7 @@ export function Projects() {
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {projects.map((p) => {
               const pid = p.id as number;
+              const isLocked = lockedProjectIds.has(pid);
               const isExpanded = expandedId === pid;
               const activitiesOpen = expandedActivitiesId === pid;
               const rules = projectRules[pid] ?? [];
@@ -698,54 +763,148 @@ export function Projects() {
                 <div key={pid} style={{ borderBottom: '0.5px solid rgba(255,255,255,0.06)' }}>
                   {/* project row */}
                   <div
-                    className={`project-row project-page-row${activitiesOpen ? ' is-open' : ''}`}
-                    onClick={() => toggleActivities(pid)}
+                    className={`project-row project-page-row${activitiesOpen && !isLocked ? ' is-open' : ''}`}
+                    onClick={() => !isLocked && toggleActivities(pid)}
                     style={{
                       padding: '11px 0',
                       borderBottom: 'none',
-                      cursor: 'pointer',
+                      cursor: isLocked ? 'default' : 'pointer',
+                      opacity: isLocked ? 0.45 : 1,
                     }}
                   >
-                    {activitiesOpen ? (
+                    {isLocked ? (
+                      <Lock size={13} style={{ color: 'rgba(255,255,255,0.30)', flexShrink: 0 }} />
+                    ) : activitiesOpen ? (
                       <ChevronDown size={13} style={{ color: 'rgba(255,255,255,0.30)', flexShrink: 0 }} />
                     ) : (
                       <ChevronRight size={13} style={{ color: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
                     )}
                     <span className="project-dot" style={{ background: p.color, width: 10, height: 10 }} />
                     <span style={{ fontSize: 13.5, flex: 1 }}>{p.name}</span>
-                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', marginRight: 6 }}>
-                      {assignedActivities.length} activit{assignedActivities.length === 1 ? 'y' : 'ies'}
-                    </span>
-                    {projectTotalSecs > 0 && (
-                      <span style={{ fontSize: 11, color: p.color, fontVariantNumeric: 'tabular-nums', marginRight: 8 }}>
-                        {formatDuration(projectTotalSecs)}
-                      </span>
+                    {isLocked ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onUpgrade(); }}
+                        style={{
+                          padding: '3px 10px', borderRadius: 5, cursor: 'pointer',
+                          border: '0.5px solid rgba(45,212,191,0.30)',
+                          background: 'rgba(45,212,191,0.08)', color: 'rgba(45,212,191,0.75)',
+                          fontSize: 11, fontFamily: 'Inter, sans-serif',
+                        }}
+                      >
+                        Upgrade to unlock →
+                      </button>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', marginRight: 6 }}>
+                          {assignedActivities.length} activit{assignedActivities.length === 1 ? 'y' : 'ies'}
+                        </span>
+                        {projectTotalSecs > 0 && (
+                          <span style={{ fontSize: 11, color: p.color, fontVariantNumeric: 'tabular-nums', marginRight: 8 }}>
+                            {formatDuration(projectTotalSecs)}
+                          </span>
+                        )}
+                        {isExpanded && rules.length > 0 && (
+                          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', marginRight: 6 }}>
+                            {rules.length} rule{rules.length !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        <button
+                          className={`project-rules-button${isExpanded ? ' is-open' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpand(pid);
+                          }}
+                        >
+                          {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          Rules
+                        </button>
+                        {deleteConfirmId === pid ? (
+                          <>
+                            <button
+                              className="delete-confirm-button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteProject(pid);
+                              }}
+                              disabled={deletingProjectId === pid}
+                              style={{
+                                padding: '3px 9px', borderRadius: 5, cursor: deletingProjectId === pid ? 'default' : 'pointer',
+                                border: '0.5px solid rgba(239,68,68,0.35)',
+                                background: 'rgba(239,68,68,0.10)', color: 'rgba(248,113,113,0.88)',
+                                fontSize: 11, fontFamily: 'Inter, sans-serif',
+                              }}
+                            >
+                              {deletingProjectId === pid ? 'Deleting…' : 'Delete'}
+                            </button>
+                            <button
+                              className="cancel-confirm-button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirmId(null);
+                              }}
+                              style={{
+                                padding: '3px 8px', borderRadius: 5, cursor: 'pointer',
+                                border: '0.5px solid rgba(255,255,255,0.12)',
+                                background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.45)',
+                                fontSize: 11, fontFamily: 'Inter, sans-serif',
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            className="icon-delete-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmId(pid);
+                            }}
+                            title="Delete project"
+                            style={{
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              width: 24, height: 24, borderRadius: 6, cursor: 'pointer',
+                              border: '0.5px solid rgba(255,255,255,0.08)',
+                              background: 'rgba(255,255,255,0.03)', color: 'rgba(255,90,90,0.50)',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </>
                     )}
-                    {isExpanded && rules.length > 0 && (
-                      <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', marginRight: 6 }}>
-                        {rules.length} rule{rules.length !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                    <button
-                      className={`project-rules-button${isExpanded ? ' is-open' : ''}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleExpand(pid);
-                      }}
-                    >
-                      {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                      Rules
-                    </button>
                   </div>
 
                   {/* rules panel */}
-                  {isExpanded && (
+                  {isExpanded && !isLocked && (
                     <div style={{
                       marginLeft: 20, marginBottom: 12,
                       borderLeft: `2px solid ${p.color}30`,
                       paddingLeft: 14,
                     }}>
-                      {rules.length === 0 && addingRuleFor !== pid && (
+                      {!isPro(tier) && (
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '8px 12px', borderRadius: 8, marginBottom: 8,
+                          background: 'rgba(45,212,191,0.05)',
+                          border: '0.5px solid rgba(45,212,191,0.15)',
+                        }}>
+                          <Lock size={11} style={{ color: 'rgba(45,212,191,0.60)', flexShrink: 0 }} />
+                          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', flex: 1 }}>Auto-rules are available on Pro</span>
+                          <button
+                            onClick={onUpgrade}
+                            style={{
+                              padding: '3px 10px', borderRadius: 5, cursor: 'pointer',
+                              border: '0.5px solid rgba(45,212,191,0.30)',
+                              background: 'rgba(45,212,191,0.10)', color: 'rgba(45,212,191,0.80)',
+                              fontSize: 11, fontFamily: 'Inter, sans-serif',
+                            }}
+                          >
+                            Upgrade →
+                          </button>
+                        </div>
+                      )}
+                      {rules.length === 0 && addingRuleFor !== pid && isPro(tier) && (
                         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.28)', padding: '4px 0 8px' }}>
                           No rules yet. Activities won't be auto-assigned to this project.
                         </div>
@@ -916,7 +1075,7 @@ export function Projects() {
                             </button>
                           </div>
                         </div>
-                      ) : (
+                      ) : isPro(tier) ? (
                         <button
                           onClick={() => { setAddingRuleFor(pid); setRuleCombinator('and'); setRuleNodes([emptyCondition()]); }}
                           style={{
@@ -930,7 +1089,7 @@ export function Projects() {
                         >
                           <Plus size={11} /> Add rule
                         </button>
-                      )}
+                      ) : null}
                     </div>
                   )}
 

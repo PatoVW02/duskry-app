@@ -120,7 +120,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             let _ = rebuild_tray(app);
         }
         "quit" => {
-            app.exit(0);
+            crate::request_real_quit(app);
         }
         other => {
             if let Some(pid_str) = other.strip_prefix("project_") {

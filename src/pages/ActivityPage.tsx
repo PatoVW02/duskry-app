@@ -2,12 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { isToday, startOfDay, format, fromUnixTime } from 'date-fns';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronRight, ChevronDown, Globe, Folder, Trash2, X } from 'lucide-react';
+import { CalendarDays, ChevronRight, ChevronDown, Globe, Folder, Trash2, X } from 'lucide-react';
 import { useActivityStore, type Activity, type RuleSuggestion } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { formatDuration } from '../lib/utils';
-import { openCheckout } from '../lib/checkout';
 import { dragState } from '../lib/dragState';
 
 // ── Tree types ─────────────────────────────────────────────────────────────
@@ -284,6 +283,7 @@ function TitleGroupRow({
   onHover: () => void;
   onHoverEnd: () => void;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const isExpandable = tg.activityIds.length > 1;
   const canEdit = Boolean(onEdit) && !isExpandable;
   const rowProps = pointerDragProps(tg.activityIds, {
@@ -295,7 +295,7 @@ function TitleGroupRow({
       {...rowProps}
       className="activity-tree-row"
       onMouseEnter={onHover}
-      onMouseLeave={onHoverEnd}
+      onMouseLeave={() => { onHoverEnd(); setConfirmDelete(false); }}
       style={{
         ...((rowProps.style as React.CSSProperties | undefined) ?? {}),
         paddingLeft,
@@ -327,16 +327,11 @@ function TitleGroupRow({
       {tpro && (
         <span style={{ width: 5, height: 5, borderRadius: '50%', background: tpro.color, flexShrink: 0, marginRight: 8 }} />
       )}
-      <button
-        type="button"
-        data-no-drag="true"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        title="Delete"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,90,90,0.40)', padding: '0 3px', display: 'flex', alignItems: 'center', flexShrink: 0, marginLeft: 'auto' }}
-      >
-        <Trash2 size={11} />
-      </button>
+      <ActivityDeleteControl
+        confirm={confirmDelete}
+        onConfirmChange={setConfirmDelete}
+        onDelete={onDelete}
+      />
     </div>
   );
 }
@@ -353,6 +348,7 @@ function ActivityLeafRow({
   onHover: () => void;
   onHoverEnd: () => void;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const rowProps = pointerDragProps([activity.id], {
     onPress: onEdit,
   }) as React.HTMLAttributes<HTMLDivElement>;
@@ -362,7 +358,7 @@ function ActivityLeafRow({
       {...rowProps}
       className="activity-tree-row"
       onMouseEnter={onHover}
-      onMouseLeave={onHoverEnd}
+      onMouseLeave={() => { onHoverEnd(); setConfirmDelete(false); }}
       style={{
         ...((rowProps.style as React.CSSProperties | undefined) ?? {}),
         paddingLeft,
@@ -405,23 +401,88 @@ function ActivityLeafRow({
       {project && (
         <span style={{ width: 5, height: 5, borderRadius: '50%', background: project.color, flexShrink: 0, marginRight: 8 }} />
       )}
-      <button
-        type="button"
-        data-no-drag="true"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        title="Delete"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,90,90,0.40)', padding: '0 3px', display: 'flex', alignItems: 'center', flexShrink: 0, marginLeft: 'auto' }}
-      >
-        <Trash2 size={11} />
-      </button>
+      <ActivityDeleteControl
+        confirm={confirmDelete}
+        onConfirmChange={setConfirmDelete}
+        onDelete={onDelete}
+      />
     </div>
+  );
+}
+
+function ActivityDeleteControl({
+  confirm,
+  onConfirmChange,
+  onDelete,
+}: {
+  confirm: boolean;
+  onConfirmChange: (confirm: boolean) => void;
+  onDelete: () => void;
+}) {
+  if (confirm) {
+    return (
+      <div data-no-drag="true" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto' }}>
+        <button
+          type="button"
+          className="delete-confirm-button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          style={{
+            padding: '1px 7px', borderRadius: 5, cursor: 'pointer',
+            border: '0.5px solid rgba(239,68,68,0.35)',
+            background: 'rgba(239,68,68,0.10)', color: 'rgba(248,113,113,0.88)',
+            fontSize: 10.5, fontFamily: 'Inter, sans-serif',
+          }}
+        >
+          Delete
+        </button>
+        <button
+          type="button"
+          className="cancel-confirm-button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onConfirmChange(false); }}
+          style={{
+            padding: '1px 6px', borderRadius: 5, cursor: 'pointer',
+            border: '0.5px solid rgba(255,255,255,0.10)',
+            background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.42)',
+            fontSize: 10.5, fontFamily: 'Inter, sans-serif',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="icon-delete-button"
+      data-no-drag="true"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); onConfirmChange(true); }}
+      title="Delete"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '0.5px solid rgba(255,255,255,0.08)',
+        borderRadius: 5,
+        cursor: 'pointer',
+        color: 'rgba(255,90,90,0.40)',
+        padding: '1px 3px',
+        display: 'flex',
+        alignItems: 'center',
+        flexShrink: 0,
+        marginLeft: 'auto',
+      }}
+    >
+      <Trash2 size={11} />
+    </button>
   );
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export function ActivityPage() {
+export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const activities      = useActivityStore((s) => s.activities);
   const viewDate        = useActivityStore((s) => s.viewDate);
   const fetchForDate    = useActivityStore((s) => s.fetchForDate);
@@ -430,12 +491,12 @@ export function ActivityPage() {
   const updateActivity  = useActivityStore((s) => s.updateActivity);
   const projects        = useProjectStore((s) => s.projects);
   const tier            = useLicenseStore((s) => s.tier);
-  const selectedPlan    = useLicenseStore((s) => s.selectedPlan);
 
   const [expandedApps, setExpandedApps] = useState<Set<string>>(() => new Set());
   const [expandedCtx,  setExpandedCtx]  = useState<Set<string>>(() => new Set());
   const [expandedTitles, setExpandedTitles] = useState<Set<string>>(() => new Set());
   const [hoveredActivityIds, setHoveredActivityIds] = useState<Set<number> | null>(null);
+  const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
   const [ruleSuggestion, setRuleSuggestion] = useState<RuleSuggestion | null>(null);
 
   // ── edit state ────────────────────────────────────────────────────────
@@ -722,7 +783,7 @@ export function ActivityPage() {
                       {...pointerDragProps(app.activityIds, { onPress: () => toggleApp(app.appName) })}
                       className="activity-tree-row"
                       onMouseEnter={() => highlightActivityIds(app.activityIds)}
-                      onMouseLeave={clearActivityHighlight}
+                      onMouseLeave={() => { clearActivityHighlight(); setDeleteConfirmKey(null); }}
                       style={upro ? { borderLeft: `2.5px solid ${upro.color}88` } : undefined}
                     >
                       <span style={{
@@ -754,16 +815,14 @@ export function ActivityPage() {
                           </span>
                         </span>
                       )}
-                      <button
-                        type="button"
-                        data-no-drag="true"
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => { e.stopPropagation(); app.activityIds.forEach((id) => deleteActivity(id)); }}
-                        title="Delete all"
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,90,90,0.40)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0, marginLeft: 'auto' }}
-                      >
-                        <Trash2 size={11} />
-                      </button>
+                      <ActivityDeleteControl
+                        confirm={deleteConfirmKey === `app:${app.appName}`}
+                        onConfirmChange={(confirm) => setDeleteConfirmKey(confirm ? `app:${app.appName}` : null)}
+                        onDelete={() => {
+                          app.activityIds.forEach((id) => deleteActivity(id));
+                          setDeleteConfirmKey(null);
+                        }}
+                      />
                     </div>
                   );
                 })()}
@@ -780,7 +839,7 @@ export function ActivityPage() {
                           {...pointerDragProps(ctx.activityIds, { onPress: () => toggleCtx(ctxKey) })}
                           className="activity-tree-row"
                           onMouseEnter={() => highlightActivityIds(ctx.activityIds)}
-                          onMouseLeave={clearActivityHighlight}
+                          onMouseLeave={() => { clearActivityHighlight(); setDeleteConfirmKey(null); }}
                           style={{ paddingLeft: 62 }}
                         >
                           <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center' }}>
@@ -804,16 +863,14 @@ export function ActivityPage() {
                           }}>
                             {formatDuration(ctx.total_s)}
                           </span>
-                          <button
-                            type="button"
-                            data-no-drag="true"
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onClick={(e) => { e.stopPropagation(); ctx.activityIds.forEach((id) => deleteActivity(id)); }}
-                            title="Delete all"
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,90,90,0.40)', padding: '0 4px', display: 'flex', alignItems: 'center', flexShrink: 0, marginLeft: 'auto' }}
-                          >
-                            <Trash2 size={11} />
-                          </button>
+                          <ActivityDeleteControl
+                            confirm={deleteConfirmKey === `ctx:${ctxKey}`}
+                            onConfirmChange={(confirm) => setDeleteConfirmKey(confirm ? `ctx:${ctxKey}` : null)}
+                            onDelete={() => {
+                              ctx.activityIds.forEach((id) => deleteActivity(id));
+                              setDeleteConfirmKey(null);
+                            }}
+                          />
                         </div>
                       )}
                       {(!showCtxRow || ctxOpen) && ctx.titles.map((tg) => {
@@ -874,7 +931,7 @@ export function ActivityPage() {
       {/* ── Right: timeline (Pro only) ──────────────────────────────────── */}
       {!showTimeline ? (
         <div className="glass-card" style={{ width: 270, height: '100%', flexShrink: 0, padding: '28px 18px', textAlign: 'center' }}>
-          <div style={{ fontSize: 22, marginBottom: 10 }}>📅</div>
+          <CalendarDays size={24} strokeWidth={1.7} style={{ color: 'rgba(45,212,191,0.78)', margin: '0 auto 10px' }} />
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Timeline</div>
           <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.38)', marginBottom: 16, lineHeight: 1.5 }}>
             Visual day timeline is a Pro feature
@@ -882,7 +939,7 @@ export function ActivityPage() {
           <button
             className="btn-primary"
             style={{ fontSize: 11.5, padding: '6px 14px' }}
-            onClick={() => openCheckout(selectedPlan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly')}
+            onClick={onUpgrade}
           >
             Upgrade →
           </button>

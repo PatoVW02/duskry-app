@@ -201,18 +201,55 @@ pub fn save_activity_start(app_name: &str, window_title: &str, started_at: i64) 
 
 pub fn finish_activity(id: i64, ended_at: i64) -> Result<()> {
     let conn = DB.lock().expect("db lock");
-    let duration = conn
+    let started_at = conn
         .query_row(
             "SELECT started_at FROM activities WHERE id = ?1",
             params![id],
             |row| row.get::<_, i64>(0),
         )
         .unwrap_or(ended_at);
+    let ended_at = ended_at.max(started_at);
     conn.execute(
         "UPDATE activities SET ended_at = ?1, duration_s = ?2 WHERE id = ?3",
-        params![ended_at, ended_at - duration, id],
+        params![ended_at, ended_at - started_at, id],
     )?;
     Ok(())
+}
+
+pub fn close_open_activities(default_end_at: i64) -> Result<usize> {
+    let conn = DB.lock().expect("db lock");
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT id, started_at,
+               (SELECT MIN(next.started_at)
+                FROM activities next
+                WHERE next.started_at > current.started_at) AS next_started_at
+        FROM activities current
+        WHERE ended_at IS NULL
+        ORDER BY started_at ASC
+    "#,
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<i64>>(2)?,
+        ))
+    })?;
+
+    let open_activities: Result<Vec<_>> = rows.collect();
+    let open_activities = open_activities?;
+    drop(stmt);
+
+    for (id, started_at, next_started_at) in &open_activities {
+        let ended_at = next_started_at.unwrap_or(default_end_at).max(*started_at);
+        conn.execute(
+            "UPDATE activities SET ended_at = ?1, duration_s = ?2 WHERE id = ?3",
+            params![ended_at, ended_at - started_at, id],
+        )?;
+    }
+
+    Ok(open_activities.len())
 }
 
 pub fn get_today_activities() -> Result<Vec<Activity>> {
@@ -641,6 +678,11 @@ pub fn get_all_projects() -> Result<Vec<Project>> {
     rows.collect()
 }
 
+pub fn count_projects() -> Result<i64> {
+    let conn = DB.lock().expect("db lock");
+    conn.query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+}
+
 pub fn create_project(name: &str, color: &str) -> Result<i64> {
     let conn = DB.lock().expect("db lock");
     let now = chrono::Utc::now().timestamp();
@@ -649,6 +691,28 @@ pub fn create_project(name: &str, color: &str) -> Result<i64> {
         params![name, color, now],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+pub fn delete_project(project_id: i64) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    conn.execute(
+        "DELETE FROM assignments WHERE project_id = ?1",
+        params![project_id],
+    )?;
+    conn.execute(
+        "DELETE FROM rule_learning_events WHERE project_id = ?1",
+        params![project_id],
+    )?;
+    conn.execute(
+        "DELETE FROM rule_learning_signals WHERE project_id = ?1",
+        params![project_id],
+    )?;
+    conn.execute(
+        "DELETE FROM rules WHERE project_id = ?1",
+        params![project_id],
+    )?;
+    conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
+    Ok(())
 }
 
 pub fn get_all_rules() -> Result<Vec<Rule>> {

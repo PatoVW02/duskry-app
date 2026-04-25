@@ -315,10 +315,12 @@ html, body, #root, #root * {
 }
 
 .project-page-row {
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s, padding 0.12s;
 }
 .project-page-row:hover,
 .project-page-row.is-open {
+  padding-left: 10px !important;
+  padding-right: 10px !important;
   background: rgba(255, 255, 255, 0.04);
   border-radius: 7px;
 }
@@ -376,10 +378,15 @@ html, body, #root, #root * {
   padding: 8px 0;
   border-bottom: 0.5px solid rgba(255, 255, 255, 0.05);
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background 0.1s, padding 0.12s;
 }
 .activity-row:last-child { border-bottom: none; }
-.activity-row:hover { background: rgba(255, 255, 255, 0.03); border-radius: 6px; }
+.activity-row:hover {
+  padding-left: 10px;
+  padding-right: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+}
 
 .activity-app-icon {
   width: 28px;
@@ -458,6 +465,87 @@ html, body, #root, #root * {
 }
 .btn-secondary:hover { background: rgba(255, 255, 255, 0.12); }
 .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.billing-button {
+  transition:
+    transform 0.14s ease,
+    filter 0.14s ease,
+    box-shadow 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.billing-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.12);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+.billing-button:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(1.04);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.14);
+}
+
+.billing-button:disabled {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+.billing-button-link:hover:not(:disabled),
+.billing-button-ghost:hover:not(:disabled) {
+  color: rgba(45, 212, 191, 0.9) !important;
+  box-shadow: none;
+}
+
+.billing-button-danger:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.55) !important;
+  color: rgba(254, 202, 202, 0.95) !important;
+  box-shadow: 0 8px 22px rgba(127, 29, 29, 0.18);
+}
+
+.icon-delete-button {
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.icon-delete-button:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12) !important;
+  border-color: rgba(248, 113, 113, 0.38) !important;
+  color: rgba(254, 202, 202, 0.92) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(127, 29, 29, 0.16);
+}
+
+.icon-delete-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.delete-confirm-button {
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.delete-confirm-button:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.16) !important;
+  border-color: rgba(248, 113, 113, 0.52) !important;
+  color: rgba(254, 202, 202, 0.96) !important;
+}
+
+.cancel-confirm-button {
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.cancel-confirm-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.20) !important;
+  color: rgba(255, 255, 255, 0.72) !important;
+}
 
 .btn-update {
   background: rgba(45, 212, 191, 0.08);

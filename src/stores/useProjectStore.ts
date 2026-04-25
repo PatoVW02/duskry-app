@@ -13,6 +13,7 @@ interface ProjectStore {
   projects: Project[];
   fetchProjects: () => Promise<void>;
   createProject: (name: string, color: string) => Promise<number>;
+  deleteProject: (projectId: number) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectStore>((set) => ({
@@ -30,5 +31,11 @@ export const useProjectStore = create<ProjectStore>((set) => ({
     const data = await invoke<Project[]>('get_projects');
     set({ projects: data });
     return id;
+  },
+
+  deleteProject: async (projectId) => {
+    await invoke('delete_project', { projectId });
+    const data = await invoke<Project[]>('get_projects');
+    set({ projects: data });
   },
 }));

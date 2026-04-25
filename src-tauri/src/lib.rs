@@ -1,4 +1,5 @@
 mod db;
+pub(crate) mod feature_flags;
 mod license;
 mod logger;
 mod notify;
@@ -7,7 +8,21 @@ mod rules;
 mod tracker;
 mod tray;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+
+static REAL_QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+pub(crate) fn request_real_quit(app: &tauri::AppHandle) {
+    REAL_QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
 
 // ─── Tracker log commands ─────────────────────────────────────────────────
 
@@ -67,6 +82,13 @@ fn assign_activity(
     let previous = db::get_activity(activity_id).ok();
     db::assign_activity(activity_id, project_id, "manual").map_err(|e| e.to_string())?;
     let activity = db::get_activity(activity_id).map_err(|e| e.to_string())?;
+    let tier = license::get_effective_tier();
+    let rule_suggestions_locked = feature_flags::billing_plans_enabled()
+        && (tier == license::AppTier::Free || tier == license::AppTier::Expired);
+    if rule_suggestions_locked {
+        return Ok(None);
+    }
+
     let learned = previous.as_ref().and_then(|a| a.project_id) != Some(project_id);
     if learned {
         db::record_assignment_learning(&activity, project_id).map_err(|e| e.to_string())?;
@@ -174,6 +196,17 @@ fn get_projects() -> Result<Vec<db::Project>, String> {
 
 #[tauri::command]
 fn create_project(app: tauri::AppHandle, name: String, color: String) -> Result<i64, String> {
+    let tier = license::get_effective_tier();
+    if feature_flags::billing_plans_enabled()
+        && (tier == license::AppTier::Free || tier == license::AppTier::Expired)
+    {
+        let count = db::count_projects().map_err(|e| e.to_string())?;
+        if count >= 3 {
+            return Err(
+                "Project limit reached. Upgrade to Pro for unlimited projects.".to_string(),
+            );
+        }
+    }
     let id = db::create_project(&name, &color).map_err(|e| e.to_string())?;
     // auto-create rules
     let auto = rules::auto_rules_for_project(&name);
@@ -183,6 +216,18 @@ fn create_project(app: tauri::AppHandle, name: String, color: String) -> Result<
     // keep tray in sync
     let _ = tray::rebuild_tray(&app);
     Ok(id)
+}
+
+#[tauri::command]
+fn delete_project(app: tauri::AppHandle, project_id: i64) -> Result<(), String> {
+    if db::get_setting("active_project_id").and_then(|v| v.parse::<i64>().ok()) == Some(project_id)
+    {
+        tracker::ACTIVE_PROJECT_ID.store(0, std::sync::atomic::Ordering::SeqCst);
+        db::set_setting("active_project_id", "0").map_err(|e| e.to_string())?;
+    }
+    db::delete_project(project_id).map_err(|e| e.to_string())?;
+    let _ = tray::rebuild_tray(&app);
+    Ok(())
 }
 
 // ─── Rules commands ─────────────────────────────────────────────────────────
@@ -220,6 +265,13 @@ fn create_suggested_rule(
     operator: String,
     value: String,
 ) -> Result<i64, String> {
+    let tier = license::get_effective_tier();
+    if feature_flags::billing_plans_enabled()
+        && (tier == license::AppTier::Free || tier == license::AppTier::Expired)
+    {
+        return Err("Upgrade to Pro to create suggested rules.".to_string());
+    }
+
     let compound_value = suggested_rule_value(&field, &operator, &value);
     let (stored_field, stored_operator) = suggested_rule_storage(&field, &operator);
     let rule_id = db::create_rule(
@@ -295,7 +347,26 @@ async fn validate_license(key: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn can_deactivate_license() -> bool {
+    license::cached_license_can_deactivate()
+}
+
+#[tauri::command]
+async fn remove_license() -> Result<String, String> {
+    let tier = license::remove_license_online().await?;
+    Ok(tier.as_str().to_string())
+}
+
+#[tauri::command]
 fn start_trial(email: String, expires_at: i64) -> Result<(), String> {
+    let already_started = db::get_setting("trial_started_at")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+        > 0;
+    if already_started {
+        return Err("A free trial has already been used on this computer.".to_string());
+    }
+
     db::set_setting("trial_email", &email).map_err(|e| e.to_string())?;
     db::set_setting(
         "trial_started_at",
@@ -304,6 +375,17 @@ fn start_trial(email: String, expires_at: i64) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     db::set_setting("trial_expires_at", &expires_at.to_string()).map_err(|e| e.to_string())?;
     db::set_setting("trial_status", "active").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn cancel_trial() -> Result<(), String> {
+    db::set_setting("trial_status", "expired").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn downgrade_to_free() -> Result<(), String> {
+    // "downgraded" is not matched by any paid/expired case → get_effective_tier() returns Free
+    db::set_setting("trial_status", "downgraded").map_err(|e| e.to_string())
 }
 
 // ─── Permissions commands ───────────────────────────────────────────────────
@@ -503,9 +585,7 @@ pub fn run() {
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        if let Some(w) = handle.get_webview_window("main") {
-                            let _ = w.hide();
-                        }
+                        hide_main_window(&handle);
                     }
                 });
             }
@@ -527,6 +607,7 @@ pub fn run() {
             assign_all_unassigned_today,
             get_projects,
             create_project,
+            delete_project,
             get_rules,
             create_rule,
             get_rules_for_project,
@@ -537,7 +618,11 @@ pub fn run() {
             set_setting,
             get_license_tier,
             validate_license,
+            can_deactivate_license,
+            remove_license,
             start_trial,
+            cancel_trial,
+            downgrade_to_free,
             get_os,
             check_accessibility,
             request_accessibility,
@@ -562,13 +647,18 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if !REAL_QUIT_REQUESTED.swap(false, Ordering::SeqCst) {
+                    api.prevent_exit();
+                    hide_main_window(app_handle);
+                }
+            }
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen {
+            tauri::RunEvent::Reopen {
                 has_visible_windows,
                 ..
-            } = event
-            {
+            } => {
                 if !has_visible_windows {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.show();
@@ -576,7 +666,6 @@ pub fn run() {
                     }
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app_handle, event);
+            _ => {}
         });
 }

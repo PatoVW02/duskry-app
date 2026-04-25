@@ -7,8 +7,9 @@ import { Permissions } from './Permissions';
 import { TrackerLog } from './TrackerLog';
 import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle, ScrollText } from 'lucide-react';
 import { useUpdaterContext } from '../../contexts/UpdaterContext';
+import { billingPlansEnabled } from '../../lib/featureFlags';
 
-type SettingsTab = 'appearance' | 'tracking' | 'permissions' | 'billing' | 'log' | 'about';
+export type SettingsTab = 'appearance' | 'tracking' | 'permissions' | 'billing' | 'log' | 'about';
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: 'appearance',  label: 'Appearance',  icon: <Palette size={13} /> },
@@ -19,18 +20,37 @@ const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: 'about',       label: 'About',       icon: <Info size={13} /> },
 ];
 
-export function Settings() {
-  const [tab, setTab] = useState<SettingsTab>('appearance');
+export function Settings({
+  activeTab = 'appearance',
+  onTabChange,
+  onUpgrade,
+}: {
+  activeTab?: SettingsTab;
+  onTabChange?: (tab: SettingsTab) => void;
+  onUpgrade?: () => void;
+}) {
+  const visibleTabs = billingPlansEnabled ? TABS : TABS.filter((t) => t.id !== 'billing');
+  const normalizedActiveTab = !billingPlansEnabled && activeTab === 'billing' ? 'appearance' : activeTab;
+  const [tab, setTab] = useState<SettingsTab>(normalizedActiveTab);
+
+  useEffect(() => {
+    setTab(normalizedActiveTab);
+  }, [normalizedActiveTab]);
+
+  const selectTab = (nextTab: SettingsTab) => {
+    setTab(nextTab);
+    onTabChange?.(nextTab);
+  };
 
   return (
     <div style={{ display: 'flex', gap: 16 }}>
       <div style={{ width: 160, flexShrink: 0 }}>
         <div className="glass-card" style={{ padding: '8px' }}>
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <button
               key={t.id}
               className={`nav-item ${tab === t.id ? 'active' : ''}`}
-              onClick={() => setTab(t.id)}
+              onClick={() => selectTab(t.id)}
             >
               {t.icon}
               {t.label}
@@ -41,9 +61,9 @@ export function Settings() {
 
       <div style={{ flex: 1, minWidth: 0 }}>
         {tab === 'appearance'  && <Appearance />}
-        {tab === 'tracking'    && <Tracking />}
+        {tab === 'tracking'    && <Tracking onUpgrade={onUpgrade} />}
         {tab === 'permissions' && <Permissions />}
-        {tab === 'billing'     && <Billing />}
+        {billingPlansEnabled && tab === 'billing' && <Billing />}
         {tab === 'log'         && <TrackerLog />}
         {tab === 'about'       && <AboutTab />}
       </div>

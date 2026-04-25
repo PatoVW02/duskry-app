@@ -7,8 +7,8 @@ import {
 } from 'date-fns';
 import { useProjectStore } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
-import { openCheckout } from '../lib/checkout';
 import { formatDuration, isDeepWorkActivity } from '../lib/utils';
+import { ChartNoAxesCombined } from 'lucide-react';
 import type { Activity } from '../stores/useActivityStore';
 
 // ── Range helpers ──────────────────────────────────────────────────────────
@@ -138,9 +138,8 @@ function Delta({ curr, prev }: { curr: number; prev: number }) {
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export function Reports() {
+export function Reports({ onUpgrade }: { onUpgrade: () => void }) {
   const tier         = useLicenseStore((s) => s.tier);
-  const selectedPlan = useLicenseStore((s) => s.selectedPlan);
   const projects     = useProjectStore((s) => s.projects);
 
   const [range, setRange]           = useState<RangeKey>('this-week');
@@ -174,15 +173,14 @@ export function Reports() {
 
   // Paywall
   if (!isPro(tier)) {
-    const upgradeKey = selectedPlan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly';
     return (
       <div className="glass-card" style={{ padding: '40px', textAlign: 'center' }}>
-        <div style={{ fontSize: 28, marginBottom: 16 }}>📊</div>
+        <ChartNoAxesCombined size={30} strokeWidth={1.7} style={{ color: 'rgba(45,212,191,0.78)', margin: '0 auto 16px' }} />
         <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 8 }}>Reports are available on Pro</div>
         <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', marginBottom: 24, maxWidth: 400, margin: '0 auto 24px' }}>
           Upgrade to Pro to access weekly and monthly reports, export your data as CSV or JSON, and see in-depth breakdowns.
         </div>
-        <button className="btn-primary" style={{ maxWidth: 200, margin: '0 auto' }} onClick={() => openCheckout(upgradeKey)}>
+        <button className="btn-primary" style={{ maxWidth: 200, margin: '0 auto' }} onClick={onUpgrade}>
           Upgrade to Pro →
         </button>
       </div>

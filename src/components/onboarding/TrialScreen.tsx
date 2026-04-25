@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { OnboardingShell } from './OnboardingShell';
 import { useLicenseStore } from '../../stores/useLicenseStore';
+import { errorMessage } from '../../lib/utils';
+import { billingPlansEnabled } from '../../lib/featureFlags';
 
 interface Props { onNext: () => void; }
 
@@ -17,7 +19,7 @@ export function TrialScreen({ onNext }: Props) {
 
   // Free plan - skip this screen entirely
   useEffect(() => {
-    if (selectedPlan === 'free') onNext();
+    if (!billingPlansEnabled || selectedPlan === 'free') onNext();
   }, [selectedPlan, onNext]);
 
   const handleStartTrial = async () => {
@@ -40,8 +42,8 @@ export function TrialScreen({ onNext }: Props) {
       } catch {}
       await startTrial(email, expiresAt);
       onNext();
-    } catch (e: any) {
-      setError(e.message ?? 'Something went wrong');
+    } catch (e) {
+      setError(errorMessage(e, 'Something went wrong'));
     } finally {
       setLoading(false);
     }
@@ -54,8 +56,8 @@ export function TrialScreen({ onNext }: Props) {
     try {
       await activateLicense(licenseKey.trim());
       onNext();
-    } catch (e: any) {
-      setError(e.message ?? 'Invalid license key');
+    } catch (e) {
+      setError(errorMessage(e, 'Invalid license key'));
     } finally {
       setLoading(false);
     }
