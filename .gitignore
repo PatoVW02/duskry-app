@@ -27,6 +27,9 @@ Thumbs.db
 *.sln
 *.sw?
 
+# Tauri updater signing key (private — never commit)
+duskry.key
+
 # Logs
 *.log
 npm-debug.log*

@@ -38,6 +38,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_CHECKOUT_PRO_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/19796589-e460-4e38-8513-0b060194031d
           VITE_CHECKOUT_PRO_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/ef3fcef5-e5d2-4b78-8b50-71739ffdc0fd
           VITE_CHECKOUT_PROPLUS_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/e4ce5c2b-7fab-4398-88c0-ad66bef7ed6a
