@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { DEFAULT_AUTO_SCENE_SCHEDULE, type AutoSceneSlot, type SceneId } from "./sceneConfig";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -93,11 +94,47 @@ export function todayLabel(): string {
   });
 }
 
-export function getAutoScene(hour: number): string {
-  if (hour >= 20 || hour < 5) return 'night-mountains';
-  if (hour < 8)               return 'forest-dawn';
-  if (hour < 17)              return 'alpine-day';
-  return 'ocean-sunset';
+export function normalizeAutoSceneSchedule(schedule: AutoSceneSlot[] | null | undefined): AutoSceneSlot[] {
+  const source = schedule && schedule.length > 0 ? schedule : DEFAULT_AUTO_SCENE_SCHEDULE;
+  return [...source]
+    .filter((slot) =>
+      Number.isFinite(slot.startMinutes)
+      && slot.startMinutes >= 0
+      && slot.startMinutes < 24 * 60
+      && typeof slot.scene === 'string')
+    .sort((a, b) => a.startMinutes - b.startMinutes);
+}
+
+export function getAutoScene(schedule: AutoSceneSlot[], date = new Date()): SceneId {
+  const normalized = normalizeAutoSceneSchedule(schedule);
+  const currentMinutes = date.getHours() * 60 + date.getMinutes();
+  let active = normalized[normalized.length - 1] ?? DEFAULT_AUTO_SCENE_SCHEDULE[DEFAULT_AUTO_SCENE_SCHEDULE.length - 1];
+
+  for (const slot of normalized) {
+    if (slot.startMinutes <= currentMinutes) {
+      active = slot;
+    } else {
+      break;
+    }
+  }
+
+  return active.scene;
+}
+
+export function formatMinutesAsTime(minutes: number): string {
+  const normalized = ((minutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const hours = Math.floor(normalized / 60);
+  const mins = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+export function parseTimeToMinutes(value: string): number {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return 0;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return 0;
+  return hours * 60 + minutes;
 }
 
 export function daysLeft(expiresAt: number): number {

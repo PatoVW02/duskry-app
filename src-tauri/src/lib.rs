@@ -4,6 +4,7 @@ mod license;
 mod logger;
 mod notify;
 mod permissions;
+mod paths;
 mod rules;
 mod tracker;
 mod tray;

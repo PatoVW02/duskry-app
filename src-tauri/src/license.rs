@@ -3,7 +3,6 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use chrono::Utc;
-use dirs::data_dir;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -131,11 +130,7 @@ fn derive_key(machine_id: &str) -> [u8; 32] {
 }
 
 fn cache_path() -> PathBuf {
-    let mut p = data_dir().unwrap_or_else(|| PathBuf::from("."));
-    p.push("duskry");
-    std::fs::create_dir_all(&p).ok();
-    p.push(CACHE_FILE);
-    p
+    crate::paths::app_data_file(CACHE_FILE)
 }
 
 fn read_cache() -> Option<LicenseCache> {

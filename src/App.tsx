@@ -50,6 +50,11 @@ function App() {
   const updaterIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { onboardingComplete, loadSettings } = useSettingsStore();
+  const scenePreviewMode = useSettingsStore((s) => s.scenePreviewMode);
+  const scenePreviewScene = useSettingsStore((s) => s.scenePreviewScene);
+  const closeScenePreview = useSettingsStore((s) => s.closeScenePreview);
+  const setScene = useSettingsStore((s) => s.setScene);
+  const setSceneAuto = useSettingsStore((s) => s.setSceneAuto);
   const { tier, fetchTier } = useLicenseStore();
   const fetchProjects = useProjectStore((s) => s.fetchProjects);
   const fetchPrices = usePricesStore((s) => s.fetchPrices);
@@ -130,25 +135,51 @@ function App() {
       <div className="scene-overlay" />
       <div className="app-content">
         <Sidebar activePage={page} onNavigate={setPage} />
-        <div className="main-area">
-          <TopBar
-            title={PAGE_TITLES[page]}
-            onUpgrade={openBillingSettings}
-            dateNav={page === 'overview' || page === 'activity' || page === 'projects' ? {
-              viewDate,
-              onPrev:  canGoBack ? () => stepDate(-1) : undefined,
-              onNext:  () => stepDate(1),
-              onToday: goToToday,
-              historyLocked: !canGoBack,
-            } : undefined}
-          />
-          <div className={`page-content ${page === 'activity' ? 'page-content--activity' : ''}`}>
-            {page === 'overview'  && <Overview />}
-            {page === 'activity'  && <ActivityPage onUpgrade={openBillingSettings} />}
-            {page === 'projects'  && <Projects onUpgrade={openBillingSettings} />}
-            {page === 'reports'   && <Reports onUpgrade={openBillingSettings} />}
-            {page === 'settings'  && <Settings activeTab={settingsTab} onTabChange={setSettingsTab} onUpgrade={openBillingSettings} />}
-          </div>
+        <div className={`main-area ${scenePreviewMode ? 'main-area--scene-preview' : ''}`}>
+          {scenePreviewMode ? (
+            <div className="scene-preview-panel">
+              <div className="scene-preview-actions">
+                <button
+                  type="button"
+                  className="scene-preview-btn scene-preview-btn--primary"
+                  onClick={() => {
+                    if (!scenePreviewScene) return;
+                    void setScene(scenePreviewScene).then(() => setSceneAuto(false)).then(() => closeScenePreview());
+                  }}
+                >
+                  Set
+                </button>
+                <button
+                  type="button"
+                  className="scene-preview-btn"
+                  onClick={closeScenePreview}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <TopBar
+                title={PAGE_TITLES[page]}
+                onUpgrade={openBillingSettings}
+                dateNav={page === 'overview' || page === 'activity' || page === 'projects' ? {
+                  viewDate,
+                  onPrev:  canGoBack ? () => stepDate(-1) : undefined,
+                  onNext:  () => stepDate(1),
+                  onToday: goToToday,
+                  historyLocked: !canGoBack,
+                } : undefined}
+              />
+              <div className={`page-content ${page === 'activity' ? 'page-content--activity' : ''}`}>
+                {page === 'overview'  && <Overview />}
+                {page === 'activity'  && <ActivityPage onUpgrade={openBillingSettings} />}
+                {page === 'projects'  && <Projects onUpgrade={openBillingSettings} />}
+                {page === 'reports'   && <Reports onUpgrade={openBillingSettings} />}
+                {page === 'settings'  && <Settings activeTab={settingsTab} onTabChange={setSettingsTab} onUpgrade={openBillingSettings} />}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

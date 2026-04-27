@@ -38,16 +38,16 @@ Core capabilities in the current codebase include:
 ### Desktop app
 
 ```bash
-cd App/flowlog
+cd App
 cp .env.example .env
 npm install
-npm run dev
+npm run tauri dev
 ```
 
 Notes:
 
 - Fill in the values in `.env` before starting the app.
-- Tauri uses Vite in development and opens against `http://localhost:1420`.
+- `npm run tauri dev` starts the Vite dev server and then launches the desktop app against `http://localhost:1420`.
 
 ## Releasing A New Version
 
@@ -58,24 +58,24 @@ This repo uses a split release flow:
 
 ### 1. Bump the version
 
-Before releasing, update the desktop app version in [App/flowlog/package.json](/Users/patricio/Development/Personal/Apps/Time%20Tracker/App/flowlog/package.json). The current version is `0.6.1`.
+Before releasing, update the desktop app version in [package.json](/Users/patricio/Development/Personal/Apps/Duskry/App/package.json). The current version is `0.6.1`.
 
-The macOS release script will sync that same version into [App/flowlog/src-tauri/tauri.conf.json](/Users/patricio/Development/Personal/Apps/Time%20Tracker/App/flowlog/src-tauri/tauri.conf.json) automatically, but it does not bump the version for you.
+The macOS release script will sync that same version into [src-tauri/tauri.conf.json](/Users/patricio/Development/Personal/Apps/Duskry/App/src-tauri/tauri.conf.json) automatically, but it does not bump the version for you.
 
 ### 2. Build and publish the macOS release
 
 Run this on a Mac from the desktop app directory:
 
 ```bash
-cd App/flowlog
+cd App
 npm run release
 ```
 
-This runs [App/flowlog/scripts/release-mac.sh](/Users/patricio/Development/Personal/Apps/Time%20Tracker/App/flowlog/scripts/release-mac.sh), which:
+This runs [scripts/release-mac.sh](/Users/patricio/Development/Personal/Apps/Duskry/App/scripts/release-mac.sh), which:
 
 - Loads `.env`
 - Reads the updater signing password from `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- Reads the private updater key from `App/flowlog/duskry.key` if present
+- Reads the private updater key from `App/duskry.key` if present
 - Syncs `src-tauri/tauri.conf.json` to the version from `package.json`
 - Builds macOS bundles for:
   - `aarch64-apple-darwin`
@@ -93,7 +93,7 @@ This runs [App/flowlog/scripts/release-mac.sh](/Users/patricio/Development/Perso
 
 ### 3. Let GitHub Actions build Windows
 
-Pushing a tag that matches `v*` triggers the Windows release workflow at [App/flowlog/.github/workflows/release.yml](/Users/patricio/Development/Personal/Apps/Time%20Tracker/App/flowlog/.github/workflows/release.yml).
+Pushing a tag that matches `v*` triggers the Windows release workflow at [.github/workflows/release.yml](/Users/patricio/Development/Personal/Apps/Duskry/App/.github/workflows/release.yml).
 
 That workflow:
 
@@ -110,7 +110,7 @@ The merged `latest.json` is what powers the in-app auto-updater across platforms
 If the version is already correct and you only need to push the tag:
 
 ```bash
-cd App/flowlog
+cd App
 npm run release:tag-only
 ```
 
@@ -126,7 +126,7 @@ These are required when running `npm run release` locally on macOS:
 | --- | --- |
 | Apple signing identity in Keychain | Used by Tauri during macOS bundle/signing steps |
 | `gh` authenticated | Creates the GitHub release and uploads assets |
-| `App/flowlog/duskry.key` | Private updater signing key used to generate updater signatures |
+| `App/duskry.key` | Private updater signing key used to generate updater signatures |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the updater signing key |
 
 ### GitHub Actions secrets
@@ -142,9 +142,9 @@ Note: the current Windows workflow embeds the Lemon Squeezy checkout URLs direct
 
 ## Environment Variables
 
-### Desktop app: `App/flowlog/.env`
+### Desktop app: `App/.env`
 
-Based on [App/flowlog/.env.example](/Users/patricio/Development/Personal/Apps/Time%20Tracker/App/flowlog/.env.example):
+Based on [.env.example](/Users/patricio/Development/Personal/Apps/Duskry/App/.env.example):
 
 | Variable | Purpose |
 | --- | --- |
@@ -158,7 +158,7 @@ Based on [App/flowlog/.env.example](/Users/patricio/Development/Personal/Apps/Ti
 
 ### Landing page: `Landing/.env.local`
 
-Based on [Landing/.env.local.example](/Users/patricio/Development/Personal/Apps/Time%20Tracker/Landing/.env.local.example):
+Based on [Landing/.env.local.example](/Users/patricio/Development/Personal/Apps/Duskry/Landing/.env.local.example):
 
 | Variable | Purpose |
 | --- | --- |

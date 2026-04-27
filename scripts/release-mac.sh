@@ -19,7 +19,7 @@ if [ -f "$ROOT_DIR/.env" ]; then
 fi
 
 # Load updater signing key (needed for .sig files used by auto-updater)
-# Private key lives at App/flowlog/duskry.key (gitignored)
+# Private key lives at App/duskry.key (gitignored)
 # Password is read from .env as TAURI_SIGNING_PRIVATE_KEY_PASSWORD (already sourced above)
 KEY_FILE="${ROOT_DIR}/duskry.key"
 if [ -f "$KEY_FILE" ]; then

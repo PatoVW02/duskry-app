@@ -1,4 +1,3 @@
-use dirs::data_dir;
 use once_cell::sync::Lazy;
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
@@ -13,11 +12,7 @@ static DB: Lazy<Mutex<Connection>> = Lazy::new(|| {
 });
 
 fn get_db_path() -> PathBuf {
-    let mut path = data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("duskry");
-    std::fs::create_dir_all(&path).ok();
-    path.push("duskry.db");
-    path
+    crate::paths::app_data_file("duskry.db")
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {
@@ -101,6 +96,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
         INSERT OR IGNORE INTO settings VALUES ('trial_status',         'none');
         INSERT OR IGNORE INTO settings VALUES ('scene',                'night-mountains');
         INSERT OR IGNORE INTO settings VALUES ('scene_auto',           'true');
+        INSERT OR IGNORE INTO settings VALUES ('scene_auto_schedule',  '[{"startMinutes":0,"scene":"arctic-night"},{"startMinutes":300,"scene":"golden-meadow"},{"startMinutes":480,"scene":"alpine-day"},{"startMinutes":720,"scene":"coastal-breeze"},{"startMinutes":1020,"scene":"ocean-sunset"},{"startMinutes":1200,"scene":"night-mountains"}]');
         INSERT OR IGNORE INTO settings VALUES ('auto_rule_suggestions_enabled', 'true');
         INSERT OR IGNORE INTO settings VALUES ('auto_create_suggested_rules_enabled', 'false');
     "#,

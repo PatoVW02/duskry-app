@@ -190,6 +190,52 @@ html, body, #root, #root * {
   min-width: 0;
 }
 
+.main-area--scene-preview {
+  position: relative;
+}
+
+.scene-preview-panel {
+  position: relative;
+  flex: 1;
+}
+
+.scene-preview-actions {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  display: flex;
+  gap: 10px;
+}
+
+.scene-preview-btn {
+  border: 0.5px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 18, 25, 0.54);
+  color: rgba(255, 255, 255, 0.82);
+  border-radius: 10px;
+  padding: 9px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
+}
+
+.scene-preview-btn:hover {
+  background: rgba(255, 255, 255, 0.10);
+  transform: translateY(-1px);
+}
+
+.scene-preview-btn--primary {
+  background: rgba(45, 212, 191, 0.18);
+  border-color: rgba(45, 212, 191, 0.45);
+  color: rgba(45, 212, 191, 0.95);
+}
+
+.scene-preview-btn--primary:hover {
+  background: rgba(45, 212, 191, 0.24);
+}
+
 .top-bar {
   display: flex;
   align-items: center;
@@ -808,18 +854,59 @@ html, body, #root, #root * {
 .scene-thumb {
   border-radius: 10px;
   overflow: hidden;
-  cursor: pointer;
+  cursor: default;
   border: 1.5px solid transparent;
   background: transparent;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, transform 0.15s;
+  position: relative;
 }
+.scene-thumb:hover { transform: translateY(-1px); }
 .scene-thumb .scene-preview {
   height: 70px;
   width: 100%;
+}
+.scene-thumb-actions {
+  position: absolute;
+  inset: 0 0 27px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: linear-gradient(to bottom, rgba(4,10,16,0.16), rgba(4,10,16,0.62));
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+.scene-thumb:hover .scene-thumb-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.scene-thumb-action {
+  border: 0.5px solid rgba(255,255,255,0.16);
+  background: rgba(8, 16, 22, 0.72);
+  color: rgba(255,255,255,0.84);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.scene-thumb-action:hover {
+  background: rgba(255,255,255,0.14);
+}
+.scene-thumb-action--primary {
+  border-color: rgba(45, 212, 191, 0.38);
+  background: rgba(45, 212, 191, 0.18);
+  color: rgba(45, 212, 191, 0.96);
+}
+.scene-thumb-action--primary:hover {
+  background: rgba(45, 212, 191, 0.24);
 }
 .scene-thumb span {
   font-size: 11px;

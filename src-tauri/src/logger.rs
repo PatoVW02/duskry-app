@@ -2,7 +2,7 @@ use chrono::Local;
 use once_cell::sync::Lazy;
 /// Simple append-only tracker log.
 ///
-/// Log file location: `{data_dir}/duskry/tracker.log`
+/// Log file location: `{data_dir}/duskry[-dev]/tracker.log`
 /// The file is automatically trimmed to the last 2 000 lines when it exceeds 200 KB
 /// so it never grows unboundedly.
 ///
@@ -16,11 +16,7 @@ const KEEP_LINES: usize = 2_000;
 
 fn log_path() -> PathBuf {
     static PATH: Lazy<PathBuf> = Lazy::new(|| {
-        let mut p = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-        p.push("duskry");
-        std::fs::create_dir_all(&p).ok();
-        p.push("tracker.log");
-        p
+        crate::paths::app_data_file("tracker.log")
     });
     PATH.clone()
 }
