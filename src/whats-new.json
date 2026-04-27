@@ -1,6 +1,52 @@
 {
   "versions": [
     {
+      "version": "1.0.0",
+      "title": "Background Scenes and What's New Modal",
+      "summary": "Duskry now has a richer scenic background system with more customization.",
+      "items": [
+        {
+          "icon": "Sun",
+          "text": "Added more scenic day, dusk, and night backgrounds."
+        },
+        {
+          "icon": "SlidersHorizontal",
+          "text": "You can now change both the start time and assigned background for each auto scene slot."
+        },
+        {
+          "icon": "MousePointerClick",
+          "text": "Background selection is smoother with direct hover actions in Appearance."
+        },
+        {
+          "icon": "Sparkles",
+          "text": "Added a 'What's New' modal to highlight new features after updates."
+        }
+      ]
+    },
+    {
+      "version": "0.7.4",
+      "title": "Background Scenes and What's New Modal",
+      "summary": "Duskry now has a richer scenic background system with more customization.",
+      "items": [
+        {
+          "icon": "Sun",
+          "text": "Added more scenic day, dusk, and night backgrounds."
+        },
+        {
+          "icon": "SlidersHorizontal",
+          "text": "You can now change both the start time and assigned background for each auto scene slot."
+        },
+        {
+          "icon": "MousePointerClick",
+          "text": "Background selection is smoother with direct hover actions in Appearance."
+        },
+        {
+          "icon": "Sparkles",
+          "text": "Added a 'What's New' modal to highlight new features after updates."
+        }
+      ]
+    },
+    {
       "version": "0.7.3",
       "title": "Background Scenes and What's New Modal",
       "summary": "Duskry now has a richer scenic background system with more customization.",
