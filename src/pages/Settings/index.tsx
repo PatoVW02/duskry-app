@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
 import { Appearance } from './Appearance';
 import { Tracking } from './Tracking';
 import { Billing } from './Billing';
 import { Permissions } from './Permissions';
 import { TrackerLog } from './TrackerLog';
-import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle, ScrollText } from 'lucide-react';
+import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle, ScrollText, Sparkles } from 'lucide-react';
 import { useUpdaterContext } from '../../contexts/UpdaterContext';
 import { billingPlansEnabled } from '../../lib/featureFlags';
+import { useSettingsStore } from '../../stores/useSettingsStore';
+import { getAppVersion } from '../../lib/appVersion';
 
 export type SettingsTab = 'appearance' | 'tracking' | 'permissions' | 'billing' | 'log' | 'about';
 
@@ -73,10 +74,11 @@ export function Settings({
 
 function AboutTab() {
   const { status, checkForUpdates, downloadAndInstall } = useUpdaterContext();
+  const openWhatsNewModal = useSettingsStore((s) => s.openWhatsNewModal);
   const [version, setVersion] = useState<string>('...');
 
   useEffect(() => {
-    getVersion().then(setVersion);
+    getAppVersion().then(setVersion);
   }, []);
 
   const isChecking = status.state === 'checking';
@@ -94,6 +96,14 @@ function AboutTab() {
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.28)' }}>
           Automatic time tracking for Mac &amp; Windows.
         </div>
+        <button
+          className="btn-secondary"
+          style={{ marginTop: 16, width: 'auto', padding: '8px 14px', fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 7 }}
+          onClick={openWhatsNewModal}
+        >
+          <Sparkles size={13} />
+          Open What&apos;s New
+        </button>
       </div>
 
       {/* Updater section */}

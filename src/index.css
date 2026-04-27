@@ -712,6 +712,134 @@ html, body, #root, #root * {
   pointer-events: all;
 }
 
+.whats-new-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.whats-new-modal {
+  position: relative;
+  z-index: 2;
+  width: min(680px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+  padding: 28px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow: auto;
+  background: rgba(7, 16, 24, 0.88);
+}
+
+.whats-new-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 0.5px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.whats-new-close:hover {
+  background: rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.92);
+}
+
+.whats-new-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(45,212,191,0.12);
+  border: 0.5px solid rgba(45,212,191,0.22);
+  color: rgba(45,212,191,0.92);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.whats-new-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.whats-new-version {
+  font-size: 12px;
+  color: rgba(255,255,255,0.42);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.whats-new-title {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: rgba(255,255,255,0.96);
+}
+
+.whats-new-summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(255,255,255,0.58);
+  max-width: 560px;
+}
+
+.whats-new-section {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.04);
+  border: 0.5px solid rgba(255,255,255,0.08);
+}
+
+.whats-new-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.whats-new-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: rgba(255,255,255,0.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.whats-new-icon-wrap {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(45,212,191,0.12);
+  border: 0.5px solid rgba(45,212,191,0.22);
+  color: rgba(45,212,191,0.92);
+  flex-shrink: 0;
+}
+
+.whats-new-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .paywall-card {
   position: relative;
   z-index: 2;

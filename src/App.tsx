@@ -8,6 +8,7 @@ import { SceneBackground } from './components/layout/SceneBackground';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { PaywallModal } from './components/license/PaywallModal';
+import { WhatsNewModal } from './components/whats-new/WhatsNewModal';
 
 import { WelcomeScreen } from './components/onboarding/WelcomeScreen';
 import { PermissionsScreen } from './components/onboarding/PermissionsScreen';
@@ -133,6 +134,7 @@ function App() {
     <div className="app-shell">
       <SceneBackground />
       <div className="scene-overlay" />
+      <WhatsNewModal enabled={onboardingComplete} />
       <div className="app-content">
         <Sidebar activePage={page} onNavigate={setPage} />
         <div className={`main-area ${scenePreviewMode ? 'main-area--scene-preview' : ''}`}>

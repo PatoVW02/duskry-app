@@ -9,6 +9,7 @@ interface SettingsStore {
   autoSceneSchedule: AutoSceneSlot[];
   scenePreviewMode: boolean;
   scenePreviewScene: SceneId | null;
+  whatsNewModalOpen: boolean;
   onboardingComplete: boolean;
   /** 0 means no focus project set */
   activeProjectId: number;
@@ -23,6 +24,8 @@ interface SettingsStore {
   setAutoSceneSchedule: (schedule: AutoSceneSlot[]) => Promise<void>;
   openScenePreview: (scene: SceneId) => void;
   closeScenePreview: () => void;
+  openWhatsNewModal: () => void;
+  closeWhatsNewModal: () => void;
   setOnboardingComplete: () => Promise<void>;
   setActiveProject: (projectId: number) => Promise<void>;
   setRulesOverrideActive: (enabled: boolean) => Promise<void>;
@@ -38,6 +41,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   autoSceneSchedule: DEFAULT_AUTO_SCENE_SCHEDULE,
   scenePreviewMode: false,
   scenePreviewScene: null,
+  whatsNewModalOpen: false,
   onboardingComplete: false,
   activeProjectId: 0,
   rulesOverrideActive: true,
@@ -101,6 +105,14 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
 
   closeScenePreview: () => {
     set({ scenePreviewMode: false, scenePreviewScene: null });
+  },
+
+  openWhatsNewModal: () => {
+    set({ whatsNewModalOpen: true });
+  },
+
+  closeWhatsNewModal: () => {
+    set({ whatsNewModalOpen: false });
   },
 
   setOnboardingComplete: async () => {
