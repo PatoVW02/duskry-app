@@ -1,13 +1,14 @@
 {
   "name": "duskry",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "sync:tauri-config": "node scripts/sync-tauri-config.mjs",
+    "tauri": "npm run sync:tauri-config && tauri",
     "release": "bash scripts/release-mac.sh",
     "release:tag-only": "node -e \"const v=require('./package.json').version;const {execSync}=require('child_process');execSync('git tag v'+v,{stdio:'inherit'});execSync('git push origin v'+v,{stdio:'inherit'});\""
   },

@@ -33,14 +33,7 @@ TAG="v${VERSION}"
 TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
 
-# Sync tauri.conf.json version to match package.json
-node -e "
-const fs = require('fs');
-const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-conf.version = '${VERSION}';
-fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
-"
-echo "▶ Synced tauri.conf.json version → ${VERSION}"
+node scripts/sync-tauri-config.mjs
 
 echo "▶ Building Duskry ${TAG} for macOS"
 
