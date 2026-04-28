@@ -46,7 +46,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Duskry ${{ github.ref_name }}'
-          releaseAssetNamePattern: '[name]_[arch][setup][ext]'
+          assetNamePattern: '[name]_[arch][setup][ext]'
           releaseBody: |
             ## What's new
 
