@@ -12,6 +12,19 @@ export type UpdateStatus =
 
 export const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
+function isMissingWindowsInstallerError(error: unknown) {
+  const message = String(error).toLowerCase();
+  const mentionsMissingAsset =
+    message.includes('not found') ||
+    message.includes('missing');
+  const mentionsWindowsInstaller =
+    message.includes('.msi') ||
+    message.includes('.exe') ||
+    message.includes('installer');
+
+  return mentionsMissingAsset && mentionsWindowsInstaller;
+}
+
 export function useUpdater() {
   const [status, setStatus] = useState<UpdateStatus>({ state: 'idle' });
   const checkingRef = useRef(false);
@@ -28,7 +41,11 @@ export function useUpdater() {
         setStatus({ state: 'upToDate' });
       }
     } catch (err) {
-      setStatus({ state: 'error', message: String(err) });
+      if (isMissingWindowsInstallerError(err)) {
+        setStatus({ state: 'upToDate' });
+      } else {
+        setStatus({ state: 'error', message: String(err) });
+      }
     } finally {
       checkingRef.current = false;
     }
@@ -52,7 +69,11 @@ export function useUpdater() {
       });
       await relaunch();
     } catch (err) {
-      setStatus({ state: 'error', message: String(err) });
+      if (isMissingWindowsInstallerError(err)) {
+        setStatus({ state: 'upToDate' });
+      } else {
+        setStatus({ state: 'error', message: String(err) });
+      }
     }
   }
 

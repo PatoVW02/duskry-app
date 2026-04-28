@@ -46,6 +46,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Duskry ${{ github.ref_name }}'
+          releaseAssetNamePattern: '[name]_[arch][setup][ext]'
           releaseBody: |
             ## What's new
 
@@ -79,4 +80,3 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
