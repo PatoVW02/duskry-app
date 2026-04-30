@@ -1,15 +1,15 @@
 import { createContext, useContext } from 'react';
-import type { UpdateStatus } from '../hooks/useUpdater';
+import type { UpdateCheckResult, UpdateStatus } from '../hooks/useUpdater';
 
 interface UpdaterContextValue {
   status: UpdateStatus;
-  checkForUpdates: () => Promise<void>;
+  checkForUpdates: () => Promise<UpdateCheckResult>;
   downloadAndInstall: () => Promise<void>;
 }
 
 export const UpdaterContext = createContext<UpdaterContextValue>({
   status: { state: 'idle' },
-  checkForUpdates: async () => {},
+  checkForUpdates: async () => ({ kind: 'upToDate' }),
   downloadAndInstall: async () => {},
 });
 

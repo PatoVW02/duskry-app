@@ -6,8 +6,12 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "notification:default",
     "core:window:allow-set-title",
     "core:window:allow-start-dragging",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
     "updater:default",
     "process:default"
   ]

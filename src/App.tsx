@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { onAction } from '@tauri-apps/plugin-notification';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import './index.css';
-import { useUpdater, CHECK_INTERVAL_MS } from './hooks/useUpdater';
+import { useUpdater, AUTO_UPDATE_POLL_MS } from './hooks/useUpdater';
 import { UpdaterContext } from './contexts/UpdaterContext';
 
 import { SceneBackground } from './components/layout/SceneBackground';
@@ -46,6 +48,7 @@ function App() {
   const [page, setPage] = useState<Page>('overview');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
   const [obStep, setObStep] = useState<OnboardingStep>(0);
+  const [startupUpdateToast, setStartupUpdateToast] = useState<null | { kind: 'available' | 'downloaded'; version: string }>(null);
   const updater = useUpdater();
   const updaterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const updaterIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -80,6 +83,21 @@ function App() {
     setPage('settings');
   };
 
+  const openAboutSettings = async () => {
+    setSettingsTab('about');
+    setPage('settings');
+    const window = getCurrentWindow();
+    try {
+      await window.show();
+    } catch {}
+    try {
+      await window.unminimize();
+    } catch {}
+    try {
+      await window.setFocus();
+    } catch {}
+  };
+
   useEffect(() => {
     loadSettings();
     fetchTier();
@@ -98,15 +116,44 @@ function App() {
     prevOnboardingComplete.current = onboardingComplete;
   }, [onboardingComplete]);
 
-  // Auto-check for updates once on startup, then every 4 hours
+  // Show an in-app toast on startup if an update is available.
   useEffect(() => {
-    updaterTimerRef.current = setTimeout(updater.checkForUpdates, 3000);
-    updaterIntervalRef.current = setInterval(updater.checkForUpdates, CHECK_INTERVAL_MS);
+    updaterTimerRef.current = setTimeout(() => {
+      void updater.checkForUpdates().then((result) => {
+        if (result.kind === 'available' || result.kind === 'downloaded') {
+          setStartupUpdateToast({ kind: result.kind, version: result.version });
+        }
+      });
+    }, 3000);
     return () => {
       if (updaterTimerRef.current) clearTimeout(updaterTimerRef.current);
+    };
+  }, []);
+
+  // Background auto-check runs separately and only once per local day.
+  useEffect(() => {
+    void updater.runAutomaticUpdateCheck();
+    updaterIntervalRef.current = setInterval(() => {
+      void updater.runAutomaticUpdateCheck();
+    }, AUTO_UPDATE_POLL_MS);
+    return () => {
       if (updaterIntervalRef.current) clearInterval(updaterIntervalRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const unlistenPromise = onAction(async (notification) => {
+      if (!mounted) return;
+      if (notification.extra?.kind !== 'update-ready') return;
+      await openAboutSettings();
+    });
+
+    return () => {
+      mounted = false;
+      void unlistenPromise.then((listener) => listener.unregister());
+    };
   }, []);
 
   // ── Onboarding ──────────────────────────────────────────────
@@ -173,6 +220,71 @@ function App() {
                   historyLocked: !canGoBack,
                 } : undefined}
               />
+              {startupUpdateToast && (
+                <div
+                  className="glass-card"
+                  style={{
+                    position: 'absolute',
+                    top: 18,
+                    right: 24,
+                    zIndex: 30,
+                    width: 320,
+                    padding: '14px 14px 12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    background: 'rgba(8, 18, 24, 0.82)',
+                    border: '1px solid rgba(45,212,191,0.22)',
+                    boxShadow: '0 16px 40px rgba(0,0,0,0.28)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.92)' }}>
+                        {startupUpdateToast.kind === 'downloaded' ? 'Update Ready' : 'Update Available'}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 4, lineHeight: 1.45 }}>
+                        Duskry {startupUpdateToast.version} {startupUpdateToast.kind === 'downloaded' ? 'has already been downloaded.' : 'is available to install.'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setStartupUpdateToast(null)}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'rgba(255,255,255,0.42)',
+                        cursor: 'pointer',
+                        padding: 0,
+                        boxShadow: 'none',
+                        fontSize: 16,
+                        lineHeight: 1,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn-secondary"
+                      style={{ width: 'auto', padding: '7px 12px', fontSize: 12 }}
+                      onClick={() => setStartupUpdateToast(null)}
+                    >
+                      Later
+                    </button>
+                    <button
+                      className="btn-primary"
+                      style={{ width: 'auto', padding: '7px 12px', fontSize: 12 }}
+                      onClick={() => {
+                        setStartupUpdateToast(null);
+                        void openAboutSettings();
+                      }}
+                    >
+                      Open updater
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className={`page-content ${page === 'activity' ? 'page-content--activity' : ''}`}>
                 {page === 'overview'  && <Overview />}
                 {page === 'activity'  && <ActivityPage onUpgrade={openBillingSettings} />}

@@ -84,6 +84,7 @@ function AboutTab() {
   const isChecking = status.state === 'checking';
   const isDownloading = status.state === 'downloading';
   const hasUpdate = status.state === 'available';
+  const hasDownloadedUpdate = status.state === 'downloaded';
   const isUpToDate = status.state === 'upToDate';
   const hasError = status.state === 'error';
 
@@ -137,6 +138,12 @@ function AboutTab() {
             Version {(status as { state: 'available'; version: string }).version} is available
           </div>
         )}
+        {hasDownloadedUpdate && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'rgba(45,212,191,0.8)' }}>
+            <CheckCircle size={14} />
+            Version {(status as { state: 'downloaded'; version: string }).version} is downloaded and ready to install
+          </div>
+        )}
         {isDownloading && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>
@@ -155,7 +162,7 @@ function AboutTab() {
         )}
 
         {/* Action button */}
-        {hasUpdate ? (
+        {hasUpdate || hasDownloadedUpdate ? (
           <button
             className="btn-primary"
             style={{ alignSelf: 'flex-start', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, width: 'auto', padding: '8px 16px' }}
@@ -163,7 +170,7 @@ function AboutTab() {
             disabled={isDownloading}
           >
             <Download size={13} />
-            Install &amp; Restart
+            {hasDownloadedUpdate ? 'Restart to Update' : 'Install &amp; Restart'}
           </button>
         ) : (
           <button
