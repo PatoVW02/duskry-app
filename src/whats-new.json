@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.0.5",
+      "title": "Activity Management Improvements",
+      "summary": "Duskry now makes it much easier to organize, bulk-manage, and review your tracked activities.",
+      "items": [
+        {
+          "icon": "CheckSquare",
+          "text": "You can now select multiple activities at once and assign them together from the Activity page."
+        },
+        {
+          "icon": "FolderOpen",
+          "text": "Projects can now be cleared from individual activities or whole selections directly from Activity and Overview."
+        },
+        {
+          "icon": "MousePointerClick",
+          "text": "Dragging a selected activity to a project now assigns the full current selection."
+        },
+        {
+          "icon": "Trash2",
+          "text": "Bulk actions now include quick delete, select all, and cleaner selection controls."
+        }
+      ]
+    },
+    {
       "version": "1.0.4",
       "title": "Background Scenes and What's New Modal",
       "summary": "Duskry now has a richer scenic background system with more customization.",

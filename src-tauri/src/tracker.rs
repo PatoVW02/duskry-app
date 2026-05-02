@@ -10,7 +10,15 @@ pub struct ActiveWindow {
     pub app_name: String,
     pub window_title: String,
     pub url: Option<String>,
+    pub file_path: Option<String>,
     pub timestamp: i64,
+}
+
+#[cfg(target_os = "macos")]
+struct FrontWindowMetadata {
+    app_name: String,
+    raw_title: String,
+    document_path: Option<String>,
 }
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -43,6 +51,28 @@ pub static IDLE_THRESHOLD_CACHE: AtomicI64 = AtomicI64::new(300);
 /// Raw HIDIdleTime in seconds, updated alongside IS_IDLE_CACHED.
 /// Used to detect input events (click / keystroke) when the value resets to ~0.
 static IDLE_SECS_CACHE: AtomicI64 = AtomicI64::new(0);
+
+fn current_local_day_key() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn active_project_for_today() -> i64 {
+    let active_pid = ACTIVE_PROJECT_ID.load(Ordering::SeqCst);
+    if active_pid <= 0 {
+        return 0;
+    }
+
+    let stored_day = crate::db::get_setting("active_project_date").unwrap_or_default();
+    if stored_day == current_local_day_key() {
+        return active_pid;
+    }
+
+    ACTIVE_PROJECT_ID.store(0, Ordering::SeqCst);
+    let _ = crate::db::set_setting("active_project_id", "0");
+    let _ = crate::db::set_setting("active_project_date", "");
+    crate::logger::tlog("Focus project reset for a new local day");
+    0
+}
 
 fn last_window_cache() -> &'static Mutex<Option<ActiveWindow>> {
     LAST_WINDOW.get_or_init(|| Mutex::new(None))
@@ -430,7 +460,13 @@ fn tracking_worker_loop(generation: u64) {
                 ));
 
                 // start new activity
-                match crate::db::save_activity_start(&current.app_name, &current.window_title, now)
+                match crate::db::save_activity_start(
+                    &current.app_name,
+                    &current.window_title,
+                    current.file_path.as_deref(),
+                    current.url.as_deref(),
+                    now,
+                )
                 {
                     Ok(new_id) => {
                         crate::logger::tlog(&format!("  Started activity #{}", new_id));
@@ -496,7 +532,7 @@ fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option
     let rules_locked = crate::feature_flags::billing_plans_enabled()
         && (tier == crate::license::AppTier::Free || tier == crate::license::AppTier::Expired);
 
-    let active_pid = ACTIVE_PROJECT_ID.load(Ordering::SeqCst);
+    let active_pid = active_project_for_today();
 
     if active_pid > 0 {
         // Free/Expired: rules don't apply, focus project always wins
@@ -568,45 +604,81 @@ fn run_osascript(script: &str, timeout: Duration) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 pub fn get_active_window() -> Option<ActiveWindow> {
+    let metadata = get_front_window_metadata()?;
+    let app_name = metadata.app_name;
+    let raw_title = metadata.raw_title;
+    let file_path = metadata.document_path;
+    // URL is NOT fetched here — it is fetched by the tracking loop only when
+    // the window changes, keeping the hot-path osascript calls to one per tick.
+    let window_title = get_browser_title(&app_name)
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or(raw_title);
+
+    Some(ActiveWindow {
+        app_name,
+        window_title,
+        url: None,
+        file_path,
+        timestamp: Utc::now().timestamp(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn get_front_window_metadata() -> Option<FrontWindowMetadata> {
     let result = run_osascript(
         r#"
 tell application "System Events"
     set frontProc to first application process whose frontmost is true
     set frontApp to name of frontProc
     set frontTitle to ""
+    set frontDocument to ""
     try
-        set frontTitle to title of front window of frontProc
+        set frontWindow to front window of frontProc
+        try
+            set frontTitle to value of attribute "AXTitle" of frontWindow
+        end try
+        if frontTitle is "" then
+            try
+                set frontTitle to title of frontWindow
+            end try
+        end if
+        try
+            set frontDocument to value of attribute "AXDocument" of frontWindow
+        end try
     end try
-    return frontApp & "|" & frontTitle
+    return frontApp & "|" & frontTitle & "|" & frontDocument
 end tell
     "#,
         Duration::from_secs(3),
     )?;
 
-    let parts: Vec<&str> = result.splitn(2, '|').collect();
+    let parts: Vec<&str> = result.splitn(3, '|').collect();
     let app_name = parts.get(0).unwrap_or(&"").trim().to_string();
     if app_name.is_empty() {
         return None;
     }
-    // URL is NOT fetched here — it is fetched by the tracking loop only when
-    // the window changes, keeping the hot-path osascript calls to one per tick.
-
     let raw_title = parts.get(1).unwrap_or(&"").trim().to_string();
-    // For browsers and apps that don't expose their title via System Events,
-    // fall back to a browser-specific AppleScript to get the active tab title.
-    let window_title = if raw_title.is_empty() {
-        get_browser_title(&app_name).unwrap_or_default()
-    } else {
-        raw_title
-    };
+    let document_path = normalize_ax_document(parts.get(2).copied().unwrap_or(""));
 
-    Some(ActiveWindow {
+    Some(FrontWindowMetadata {
         app_name,
-        window_title,
-        url: None,
-        timestamp: Utc::now().timestamp(),
+        raw_title,
+        document_path,
     })
 }
+
+#[cfg(target_os = "macos")]
+fn normalize_ax_document(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed
+        .strip_prefix("file://")
+        .map(|raw| raw.replace("%20", " "))
+        .or_else(|| Some(trimmed.to_string()))
+}
+
 
 #[cfg(target_os = "macos")]
 fn get_browser_title(app_name: &str) -> Option<String> {
@@ -692,6 +764,7 @@ pub fn get_active_window() -> Option<ActiveWindow> {
             app_name,
             window_title,
             url: None,
+            file_path: None,
             timestamp: chrono::Utc::now().timestamp(),
         })
     }

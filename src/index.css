@@ -652,13 +652,13 @@ html, body, #root, #root * {
 .activity-tree-row {
   display: flex;
   align-items: center;
-  height: 30px;
+  height: 32px;
   padding-left: 0;
   padding-right: 8px;
   border-radius: 7px;
   cursor: pointer;
   user-select: none;
-  gap: 0;
+  gap: 2px;
   transition: background 0.1s;
 }
 .activity-tree-row:hover {

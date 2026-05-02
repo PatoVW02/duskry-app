@@ -54,7 +54,13 @@ pub fn should_send_daily_notification() -> bool {
     if !enabled {
         return false;
     }
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    use chrono::Timelike;
+
+    let now = chrono::Local::now();
+    if now.hour() < 6 {
+        return false;
+    }
+    let today = now.format("%Y-%m-%d").to_string();
     let last = crate::db::get_setting("last_notification_date").unwrap_or_default();
     last != today
 }

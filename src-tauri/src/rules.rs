@@ -1,5 +1,6 @@
 use crate::db::Rule;
 use crate::tracker::ActiveWindow;
+use chrono::{Local, TimeZone, Timelike};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +58,10 @@ fn condition_matches(
     negated: bool,
     window: &ActiveWindow,
 ) -> bool {
+    if field == "hour" {
+        return match_hour_condition(operator, value, negated, window);
+    }
+
     let haystack = match field {
         "app" => window.app_name.to_lowercase(),
         "title" => window.window_title.to_lowercase(),
@@ -70,6 +75,37 @@ fn condition_matches(
         "equals" => haystack == needle,
         "starts_with" => haystack.starts_with(&needle),
         "ends_with" => haystack.ends_with(&needle),
+        _ => false,
+    };
+    if negated {
+        !matched
+    } else {
+        matched
+    }
+}
+
+fn match_hour_condition(operator: &str, value: &str, negated: bool, window: &ActiveWindow) -> bool {
+    let Some(local_time) = Local.timestamp_opt(window.timestamp, 0).single() else {
+        return false;
+    };
+    let current_minutes = i64::from(local_time.hour()) * 60 + i64::from(local_time.minute());
+    let matched = match operator {
+        "equals" => value
+            .parse::<i64>()
+            .map(|hour| current_minutes / 60 == hour)
+            .unwrap_or(false),
+        "between_minutes" => {
+            let Some((start, end)) = value.split_once('-') else {
+                return false;
+            };
+            let Ok(start) = start.parse::<i64>() else {
+                return false;
+            };
+            let Ok(end) = end.parse::<i64>() else {
+                return false;
+            };
+            current_minutes >= start && current_minutes <= end
+        }
         _ => false,
     };
     if negated {

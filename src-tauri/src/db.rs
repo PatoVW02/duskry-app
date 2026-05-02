@@ -71,6 +71,8 @@ fn init_schema(conn: &Connection) -> Result<()> {
             app_name     TEXT NOT NULL,
             window_title TEXT,
             domain       TEXT,
+            file_path    TEXT,
+            started_at   INTEGER,
             updated_at   INTEGER NOT NULL
         );
 
@@ -106,6 +108,18 @@ fn init_schema(conn: &Connection) -> Result<()> {
         "rule_learning_signals",
         "last_prompted_count",
         "ALTER TABLE rule_learning_signals ADD COLUMN last_prompted_count INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "rule_learning_events",
+        "file_path",
+        "ALTER TABLE rule_learning_events ADD COLUMN file_path TEXT",
+    )?;
+    ensure_column(
+        conn,
+        "rule_learning_events",
+        "started_at",
+        "ALTER TABLE rule_learning_events ADD COLUMN started_at INTEGER",
     )?;
     Ok(())
 }
@@ -186,11 +200,17 @@ pub struct RuleSuggestion {
     pub label: String,
 }
 
-pub fn save_activity_start(app_name: &str, window_title: &str, started_at: i64) -> Result<i64> {
+pub fn save_activity_start(
+    app_name: &str,
+    window_title: &str,
+    file_path: Option<&str>,
+    domain: Option<&str>,
+    started_at: i64,
+) -> Result<i64> {
     let conn = DB.lock().expect("db lock");
     conn.execute(
-        "INSERT INTO activities (app_name, window_title, started_at) VALUES (?1, ?2, ?3)",
-        params![app_name, window_title, started_at],
+        "INSERT INTO activities (app_name, window_title, file_path, domain, started_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![app_name, window_title, file_path, domain, started_at],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -316,6 +336,15 @@ pub fn assign_activity(activity_id: i64, project_id: i64, source: &str) -> Resul
     Ok(())
 }
 
+pub fn unassign_activity(activity_id: i64) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    conn.execute(
+        "DELETE FROM assignments WHERE activity_id = ?1",
+        params![activity_id],
+    )?;
+    Ok(())
+}
+
 pub fn get_activity(activity_id: i64) -> Result<Activity> {
     let conn = DB.lock().expect("db lock");
     conn.query_row(
@@ -356,8 +385,8 @@ pub fn record_assignment_learning(activity: &Activity, project_id: i64) -> Resul
         conn.execute(
             r#"
             INSERT OR REPLACE INTO rule_learning_events
-                (activity_id, project_id, app_name, window_title, domain, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                (activity_id, project_id, app_name, window_title, domain, file_path, started_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
         "#,
             params![
                 activity_id,
@@ -373,6 +402,12 @@ pub fn record_assignment_learning(activity: &Activity, project_id: i64) -> Resul
                     .as_deref()
                     .map(str::trim)
                     .filter(|v| !v.is_empty()),
+                activity
+                    .file_path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty()),
+                activity.started_at,
                 now,
             ],
         )?;
@@ -511,6 +546,64 @@ fn build_rich_rule_candidates(
     }
 
     let mut candidates = Vec::new();
+    let normalized_title = activity
+        .window_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let time_bucket = build_time_bucket(activity.started_at);
+
+    if let Some(title) = normalized_title.as_deref() {
+        let title_count = title_signal_count(conn, project_id, app_name, title)?;
+        if title_count >= threshold {
+            let value = compound_rule_json(vec![
+                rule_condition("app", "equals", app_name),
+                rule_condition("title", "contains", title),
+            ]);
+            upsert_learning_signal_count(conn, project_id, "compound", "matches", &value, title_count)?;
+            candidates.push((
+                "compound".to_string(),
+                "matches".to_string(),
+                value,
+                format!("app equals \"{}\" AND window title contains \"{}\"", app_name, title),
+            ));
+        }
+
+        let timed_title_count = timed_title_signal_count(
+            conn,
+            project_id,
+            app_name,
+            title,
+            time_bucket.start_minute,
+            time_bucket.end_minute,
+        )?;
+        if timed_title_count >= threshold {
+            let value = compound_rule_json(vec![
+                rule_condition("app", "equals", app_name),
+                rule_condition("title", "contains", title),
+                rule_condition(
+                    "hour",
+                    "between_minutes",
+                    &format!("{}-{}", time_bucket.start_minute, time_bucket.end_minute),
+                ),
+            ]);
+            upsert_learning_signal_count(conn, project_id, "compound", "matches", &value, timed_title_count)?;
+            candidates.push((
+                "compound".to_string(),
+                "matches".to_string(),
+                value,
+                format!(
+                    "app equals \"{}\" AND window title contains \"{}\" AND time is between {} and {}",
+                    app_name,
+                    title,
+                    format_minutes(time_bucket.start_minute),
+                    format_minutes(time_bucket.end_minute),
+                ),
+            ));
+        }
+    }
+
     let mut stmt = conn.prepare(
         r#"
         SELECT domain, COUNT(*) AS c
@@ -579,6 +672,96 @@ fn build_rich_rule_candidates(
     }
 
     Ok(candidates)
+}
+
+struct TimeBucket {
+    start_minute: i64,
+    end_minute: i64,
+}
+
+fn build_time_bucket(started_at: i64) -> TimeBucket {
+    use chrono::{Local, TimeZone, Timelike};
+
+    let local = Local
+        .timestamp_opt(started_at, 0)
+        .single()
+        .unwrap_or_else(Local::now);
+    let minutes = i64::from(local.hour()) * 60 + i64::from(local.minute());
+    let start_minute = (minutes / 120) * 120;
+    let end_minute = (start_minute + 119).min(1_439);
+    TimeBucket {
+        start_minute,
+        end_minute,
+    }
+}
+
+fn format_minutes(total_minutes: i64) -> String {
+    let hours = total_minutes.div_euclid(60);
+    let minutes = total_minutes.rem_euclid(60);
+    format!("{:02}:{:02}", hours, minutes)
+}
+
+fn rule_condition(field: &str, operator: &str, value: &str) -> serde_json::Value {
+    serde_json::json!({
+        "field": field,
+        "operator": operator,
+        "value": value,
+        "negated": false
+    })
+}
+
+fn compound_rule_json(conditions: Vec<serde_json::Value>) -> String {
+    serde_json::json!({
+        "combinator": "and",
+        "conditions": conditions,
+    })
+    .to_string()
+}
+
+fn title_signal_count(
+    conn: &Connection,
+    project_id: i64,
+    app_name: &str,
+    title: &str,
+) -> Result<i64> {
+    conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM rule_learning_events
+        WHERE project_id = ?1
+          AND app_name = ?2
+          AND window_title IS NOT NULL
+          AND lower(trim(window_title)) = lower(trim(?3))
+    "#,
+        params![project_id, app_name, title],
+        |row| row.get(0),
+    )
+}
+
+fn timed_title_signal_count(
+    conn: &Connection,
+    project_id: i64,
+    app_name: &str,
+    title: &str,
+    start_minute: i64,
+    end_minute: i64,
+) -> Result<i64> {
+    conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM rule_learning_events
+        WHERE project_id = ?1
+          AND app_name = ?2
+          AND window_title IS NOT NULL
+          AND lower(trim(window_title)) = lower(trim(?3))
+          AND started_at IS NOT NULL
+          AND CAST(strftime('%H', datetime(started_at, 'unixepoch', 'localtime')) AS INTEGER) * 60
+              + CAST(strftime('%M', datetime(started_at, 'unixepoch', 'localtime')) AS INTEGER)
+              BETWEEN ?4 AND ?5
+    "#,
+        params![project_id, app_name, title, start_minute, end_minute],
+        |row| row.get(0),
+    )
 }
 
 fn signal_count(

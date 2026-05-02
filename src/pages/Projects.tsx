@@ -123,15 +123,33 @@ function normalizeRuleNode(node: RuleNode): RuleNode {
 }
 
 function fieldLabel(field: string) {
-  return field === 'app' ? 'app name' : field === 'url' ? 'browser URL' : field === 'title' ? 'window title' : field;
+  return field === 'app'
+    ? 'app name'
+    : field === 'url'
+      ? 'browser URL'
+      : field === 'title'
+        ? 'window title'
+        : field === 'hour'
+          ? 'time of day'
+          : field;
 }
 
 function operatorLabel(operator: string) {
-  return operator.replace('_', ' ');
+  return operator === 'between_minutes' ? 'is between' : operator.replace('_', ' ');
+}
+
+function formatMinutesLabel(value: string) {
+  const [start, end] = value.split('-').map((part) => parseInt(part, 10));
+  if (Number.isNaN(start) || Number.isNaN(end)) return value;
+  const toLabel = (total: number) => `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  return `${toLabel(start)} and ${toLabel(end)}`;
 }
 
 function conditionLabel(condition: RuleCondition) {
-  return `${condition.negated ? 'NOT ' : ''}${fieldLabel(condition.field)} ${operatorLabel(condition.operator)} "${condition.value}"`;
+  const valueLabel = condition.operator === 'between_minutes'
+    ? formatMinutesLabel(condition.value)
+    : `"${condition.value}"`;
+  return `${condition.negated ? 'NOT ' : ''}${fieldLabel(condition.field)} ${operatorLabel(condition.operator)} ${valueLabel}`;
 }
 
 function nodeHasValue(node: RuleNode): boolean {

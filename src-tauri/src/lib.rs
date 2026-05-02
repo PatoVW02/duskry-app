@@ -14,6 +14,31 @@ use tauri::Manager;
 
 static REAL_QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+fn current_local_day_key() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn refresh_active_project_state() -> i64 {
+    let active_pid = db::get_setting("active_project_id")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if active_pid <= 0 {
+        tracker::ACTIVE_PROJECT_ID.store(0, std::sync::atomic::Ordering::SeqCst);
+        return 0;
+    }
+
+    let stored_day = db::get_setting("active_project_date").unwrap_or_default();
+    if stored_day == current_local_day_key() {
+        tracker::ACTIVE_PROJECT_ID.store(active_pid, std::sync::atomic::Ordering::SeqCst);
+        return active_pid;
+    }
+
+    tracker::ACTIVE_PROJECT_ID.store(0, std::sync::atomic::Ordering::SeqCst);
+    let _ = db::set_setting("active_project_id", "0");
+    let _ = db::set_setting("active_project_date", "");
+    0
+}
+
 fn hide_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
@@ -125,6 +150,11 @@ fn assign_activity(
     Ok(suggestion)
 }
 
+#[tauri::command]
+fn unassign_activity(activity_id: i64) -> Result<(), String> {
+    db::unassign_activity(activity_id).map_err(|e| e.to_string())
+}
+
 // ─── Activity mutations ─────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -171,6 +201,7 @@ fn apply_rule_to_activities(rule_id: i64, from_ts: i64, to_ts: i64) -> Result<i3
             app_name: activity.app_name.clone(),
             window_title: activity.window_title.clone().unwrap_or_default(),
             url: activity.domain.clone(),
+            file_path: activity.file_path.clone(),
             timestamp: activity.started_at,
         };
         if rules::rule_matches_one(rule, &window) {
@@ -225,6 +256,7 @@ fn delete_project(app: tauri::AppHandle, project_id: i64) -> Result<(), String> 
     {
         tracker::ACTIVE_PROJECT_ID.store(0, std::sync::atomic::Ordering::SeqCst);
         db::set_setting("active_project_id", "0").map_err(|e| e.to_string())?;
+        db::set_setting("active_project_date", "").map_err(|e| e.to_string())?;
     }
     db::delete_project(project_id).map_err(|e| e.to_string())?;
     let _ = tray::rebuild_tray(&app);
@@ -427,7 +459,7 @@ fn start_tracking() {
 
 #[tauri::command]
 fn get_active_project() -> i64 {
-    tracker::ACTIVE_PROJECT_ID.load(std::sync::atomic::Ordering::SeqCst)
+    refresh_active_project_state()
 }
 
 /// project_id = 0 clears the focus.
@@ -435,6 +467,12 @@ fn get_active_project() -> i64 {
 fn set_active_project(app: tauri::AppHandle, project_id: i64) -> Result<(), String> {
     tracker::ACTIVE_PROJECT_ID.store(project_id, std::sync::atomic::Ordering::SeqCst);
     db::set_setting("active_project_id", &project_id.to_string()).map_err(|e| e.to_string())?;
+    let active_project_date = if project_id > 0 {
+        current_local_day_key()
+    } else {
+        String::new()
+    };
+    db::set_setting("active_project_date", &active_project_date).map_err(|e| e.to_string())?;
     tray::rebuild_tray(&app).map_err(|e| e.to_string())
 }
 
@@ -568,10 +606,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // ── Restore persisted state into atomics ────────────────────
-            let active_pid = db::get_setting("active_project_id")
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(0);
-            tracker::ACTIVE_PROJECT_ID.store(active_pid, std::sync::atomic::Ordering::SeqCst);
+            refresh_active_project_state();
 
             let paused = db::get_setting("tracking_paused")
                 .map(|v| v == "true")
@@ -609,6 +644,7 @@ pub fn run() {
             get_today_activities,
             get_activities_for_date,
             assign_activity,
+            unassign_activity,
             delete_activity,
             update_activity,
             create_manual_activity,

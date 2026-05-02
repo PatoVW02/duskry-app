@@ -2,12 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { isToday, startOfDay, format, fromUnixTime } from 'date-fns';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { CalendarDays, ChevronRight, ChevronDown, Globe, Folder, Trash2, X } from 'lucide-react';
+import { CalendarDays, ChevronRight, ChevronDown, Check, Globe, Folder, Trash2, X } from 'lucide-react';
 import { useActivityStore, type Activity, type RuleSuggestion } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { formatDuration } from '../lib/utils';
 import { dragState } from '../lib/dragState';
+import { Select } from '../components/ui/Select';
 
 // ── Tree types ─────────────────────────────────────────────────────────────
 
@@ -37,6 +38,9 @@ interface EditTarget {
   activityIds: number[];
 }
 
+type SelectionState = 'none' | 'partial' | 'all';
+const MIXED_PROJECT_VALUE = '__mixed__';
+
 // ── Tree builder ───────────────────────────────────────────────────────────
 
 function folderOf(fp: string | null): string | null {
@@ -53,6 +57,10 @@ function folderOf(fp: string | null): string | null {
 function displayAppName(name: string): string {
   if (!name) return name;
   return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function fullActivityLabel(activity: Activity): string {
+  return activity.window_title?.trim() || 'Untitled';
 }
 
 function buildTree(activities: Activity[]): AppGroup[] {
@@ -162,6 +170,16 @@ function unanimousProjectId(activityIds: number[], activities: Activity[]): numb
   return relevant.every((a) => a.project_id === pid) ? pid : null;
 }
 
+function getSelectionState(activityIds: number[], selectedIds: Set<number>): SelectionState {
+  let matches = 0;
+  for (const id of activityIds) {
+    if (selectedIds.has(id)) matches += 1;
+  }
+  if (matches === 0) return 'none';
+  if (matches === activityIds.length) return 'all';
+  return 'partial';
+}
+
 // ── Timeline constants ─────────────────────────────────────────────────────
 
 const HOUR_HEIGHT = 88;
@@ -219,6 +237,64 @@ function Tooltip({ activity, project, pos }: { activity: Activity; project?: Pro
   );
 }
 
+function TextTooltip({ text, pos }: { text: string; pos: TPos }) {
+  const left = Math.min(pos.x + 12, window.innerWidth - 320);
+  const top = Math.max(12, pos.y - 10);
+  return createPortal(
+    <div style={{
+      position: 'fixed',
+      left,
+      top,
+      transform: 'translateY(-100%)',
+      zIndex: 2100,
+      pointerEvents: 'none',
+      maxWidth: 320,
+      background: 'rgba(8,22,17,0.97)',
+      backdropFilter: 'blur(24px)',
+      WebkitBackdropFilter: 'blur(24px)',
+      border: '0.5px solid rgba(255,255,255,0.14)',
+      borderRadius: 10,
+      boxShadow: '0 16px 48px rgba(0,0,0,0.55)',
+      padding: '9px 12px',
+      fontSize: 12,
+      lineHeight: 1.4,
+      color: 'rgba(255,255,255,0.88)',
+      whiteSpace: 'normal',
+      wordBreak: 'break-word',
+    }}>
+      {text}
+    </div>,
+    document.body
+  );
+}
+
+function HoverText({
+  text,
+  style,
+}: {
+  text: string;
+  style?: React.CSSProperties;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [pos, setPos] = useState<TPos>({ x: 0, y: 0 });
+  return (
+    <>
+      <span
+        style={style}
+        onMouseEnter={(e) => {
+          setHovered(true);
+          setPos({ x: e.clientX, y: e.clientY });
+        }}
+        onMouseMove={(e) => setPos({ x: e.clientX, y: e.clientY })}
+        onMouseLeave={() => setHovered(false)}
+      >
+        {text}
+      </span>
+      {hovered && <TextTooltip text={text} pos={pos} />}
+    </>
+  );
+}
+
 // ── Edit modal ─────────────────────────────────────────────────────────────
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -267,16 +343,58 @@ function EditModal({ onClose, children }: { onClose: () => void; children: React
   );
 }
 
+function SelectionToggle({
+  state,
+  onToggle,
+}: {
+  state: SelectionState;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-no-drag="true"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      style={{
+        width: 20,
+        height: 20,
+        borderRadius: 7,
+        border: `0.5px solid ${state === 'none' ? 'rgba(255,255,255,0.16)' : 'rgba(45,212,191,0.42)'}`,
+        background: state === 'none' ? 'rgba(255,255,255,0.04)' : 'rgba(45,212,191,0.14)',
+        color: 'rgba(45,212,191,0.92)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        cursor: 'pointer',
+        marginLeft: 8,
+        marginRight: 10,
+      }}
+      title={state === 'all' ? 'Deselect' : 'Select'}
+    >
+      {state === 'all' ? (
+        <Check size={11} strokeWidth={2.4} />
+      ) : state === 'partial' ? (
+        <span style={{ width: 8, height: 2, borderRadius: 999, background: 'currentColor' }} />
+      ) : null}
+    </button>
+  );
+}
+
 // ── Title group row (with hover edit/delete) ───────────────────────────────
 
 function TitleGroupRow({
-  tg, tpro, paddingLeft, pointerDragProps, expanded, onToggle, onEdit, onDelete, onHover, onHoverEnd,
+  tg, tooltipText, tpro, paddingLeft, pointerDragProps, expanded, selectionState, onToggleSelect, onToggle, onEdit, onDelete, onHover, onHoverEnd,
 }: {
   tg: TitleGroup;
+  tooltipText: string;
   tpro: Project | null;
   paddingLeft: number;
   pointerDragProps: (ids: number[], options?: { onPress?: () => void }) => object;
   expanded: boolean;
+  selectionState: SelectionState;
+  onToggleSelect: () => void;
   onToggle?: () => void;
   onEdit?: () => void;
   onDelete: () => void;
@@ -300,9 +418,11 @@ function TitleGroupRow({
         ...((rowProps.style as React.CSSProperties | undefined) ?? {}),
         paddingLeft,
         cursor: isExpandable || canEdit ? 'pointer' : 'grab',
+        background: selectionState !== 'none' ? 'rgba(45,212,191,0.07)' : undefined,
         ...(tpro ? { borderLeft: `2.5px solid ${tpro.color}77` } : {}),
       }}
     >
+      <SelectionToggle state={selectionState} onToggle={onToggleSelect} />
       {isExpandable && (
         <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.24)', display: 'flex', alignItems: 'center', marginRight: 4 }}>
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
@@ -312,13 +432,13 @@ function TitleGroupRow({
         fontSize: 12,
         color: tg.title ? 'rgba(255,255,255,0.42)' : 'rgba(255,255,255,0.22)',
         fontStyle: tg.title ? 'normal' : 'italic',
-        flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
-        {tg.title || 'Untitled'}
+        <HoverText text={tooltipText} />
       </span>
       <span style={{
         fontSize: 11, color: 'rgba(255,255,255,0.28)',
-        flexShrink: 0, marginRight: tpro ? 6 : 8,
+        flexShrink: 0, marginLeft: 'auto', marginRight: tpro ? 6 : 8,
         fontVariantNumeric: 'tabular-nums',
         minWidth: 48, textAlign: 'right', whiteSpace: 'nowrap',
       }}>
@@ -337,12 +457,14 @@ function TitleGroupRow({
 }
 
 function ActivityLeafRow({
-  activity, project, paddingLeft, pointerDragProps, onEdit, onDelete, onHover, onHoverEnd,
+  activity, project, paddingLeft, pointerDragProps, selectionState, onToggleSelect, onEdit, onDelete, onHover, onHoverEnd,
 }: {
   activity: Activity;
   project: Project | null;
   paddingLeft: number;
   pointerDragProps: (ids: number[], options?: { onPress?: () => void }) => object;
+  selectionState: SelectionState;
+  onToggleSelect: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onHover: () => void;
@@ -363,21 +485,24 @@ function ActivityLeafRow({
         ...((rowProps.style as React.CSSProperties | undefined) ?? {}),
         paddingLeft,
         cursor: 'pointer',
+        background: selectionState !== 'none' ? 'rgba(45,212,191,0.07)' : undefined,
         ...(project ? { borderLeft: `2.5px solid ${project.color}55` } : {}),
       }}
     >
+      <SelectionToggle state={selectionState} onToggle={onToggleSelect} />
       <span style={{
         fontSize: 11.5,
         color: activity.window_title ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.26)',
         fontStyle: activity.window_title ? 'normal' : 'italic',
-        flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
-        {activity.window_title?.trim() || 'Untitled'}
+        <HoverText text={fullActivityLabel(activity)} />
       </span>
       <span style={{
         fontSize: 11,
         color: 'rgba(255,255,255,0.24)',
         flexShrink: 0,
+        marginLeft: 'auto',
         marginRight: project ? 6 : 8,
         fontVariantNumeric: 'tabular-nums',
         minWidth: 44,
@@ -472,7 +597,6 @@ function ActivityDeleteControl({
         display: 'flex',
         alignItems: 'center',
         flexShrink: 0,
-        marginLeft: 'auto',
       }}
     >
       <Trash2 size={11} />
@@ -487,6 +611,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const viewDate        = useActivityStore((s) => s.viewDate);
   const fetchForDate    = useActivityStore((s) => s.fetchForDate);
   const assignToProject = useActivityStore((s) => s.assignToProject);
+  const unassignFromProject = useActivityStore((s) => s.unassignFromProject);
   const deleteActivity  = useActivityStore((s) => s.deleteActivity);
   const updateActivity  = useActivityStore((s) => s.updateActivity);
   const projects        = useProjectStore((s) => s.projects);
@@ -498,11 +623,14 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [hoveredActivityIds, setHoveredActivityIds] = useState<Set<number> | null>(null);
   const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
   const [ruleSuggestion, setRuleSuggestion] = useState<RuleSuggestion | null>(null);
+  const [selectedActivityIds, setSelectedActivityIds] = useState<Set<number>>(() => new Set());
+  const [bulkAssignProjectId, setBulkAssignProjectId] = useState<string>('');
 
   // ── edit state ────────────────────────────────────────────────────────
   const [editingTarget, setEditingTarget] = useState<EditTarget | null>(null);
   const [editTitle,  setEditTitle]  = useState('');
   const [editNote,   setEditNote]   = useState('');
+  const [editProject, setEditProject] = useState('');
   const [editStart,  setEditStart]  = useState('');
   const [editEnd,    setEditEnd]    = useState('');
   const [saving,     setSaving]     = useState(false);
@@ -511,6 +639,14 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     setEditingTarget({ base: a, activityIds });
     setEditTitle(displayAppName(a.app_name));
     setEditNote(a.window_title ?? '');
+    const sharedProjectId = unanimousProjectId(activityIds, activities);
+    if (activityIds.length === 1) {
+      setEditProject(a.project_id ? String(a.project_id) : '');
+    } else if (sharedProjectId) {
+      setEditProject(String(sharedProjectId));
+    } else {
+      setEditProject(MIXED_PROJECT_VALUE);
+    }
     setEditStart(format(fromUnixTime(a.started_at), 'HH:mm'));
     const endTs = a.ended_at ?? (a.started_at + (a.duration_s ?? 0));
     setEditEnd(format(fromUnixTime(endTs), 'HH:mm'));
@@ -531,6 +667,13 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           const endTs = activity.ended_at ?? (activity.started_at + (activity.duration_s ?? 0));
           return updateActivity(id, nextAppName, nextWindowTitle, activity.started_at, endTs);
         }));
+        if (editProject !== MIXED_PROJECT_VALUE) {
+          await Promise.all(editingTarget.activityIds.map((id) => (
+            editProject
+              ? assignToProject(id, parseInt(editProject, 10)).then(() => undefined)
+              : unassignFromProject(id)
+          )));
+        }
       } else {
         const base = fromUnixTime(editingTarget.base.started_at);
         const [sh, sm] = editStart.split(':').map(Number);
@@ -541,6 +684,8 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
         let e = Math.floor(eDate.getTime() / 1000);
         if (e < s) e += 86400;
         await updateActivity(editingTarget.base.id, editTitle.trim() || editingTarget.base.app_name, editNote.trim(), s, e);
+        if (editProject) await assignToProject(editingTarget.base.id, parseInt(editProject, 10));
+        else await unassignFromProject(editingTarget.base.id);
       }
       setEditingTarget(null);
     } finally {
@@ -600,6 +745,20 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     setExpandedApps(new Set(tree.slice(0, 5).map((a) => a.appName)));
   }, [activities.length]);
 
+  useEffect(() => {
+    const visibleIds = new Set(activities.map((activity) => activity.id));
+    setSelectedActivityIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [activities]);
+
+  useEffect(() => {
+    if (selectedActivityIds.size === 0 && bulkAssignProjectId) {
+      setBulkAssignProjectId('');
+    }
+  }, [selectedActivityIds, bulkAssignProjectId]);
+
   const tree = buildTree(activities);
 
   const toggleApp = (name: string) =>
@@ -610,6 +769,32 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     setExpandedTitles((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const highlightActivityIds = (ids: number[]) => setHoveredActivityIds(new Set(ids));
   const clearActivityHighlight = () => setHoveredActivityIds(null);
+  const toggleSelectedActivityIds = useCallback((ids: number[]) => {
+    setSelectedActivityIds((current) => {
+      const next = new Set(current);
+      const allSelected = ids.every((id) => next.has(id));
+      ids.forEach((id) => {
+        if (allSelected) next.delete(id);
+        else next.add(id);
+      });
+      return next;
+    });
+  }, []);
+  const clearSelectedActivities = useCallback(() => {
+    setSelectedActivityIds(new Set());
+    setBulkAssignProjectId('');
+  }, []);
+  const selectAllActivities = useCallback(() => {
+    setSelectedActivityIds(new Set(activities.map((activity) => activity.id)));
+  }, [activities]);
+  const resolveDragIds = useCallback((ids: number[]) => {
+    const selectedIds = Array.from(selectedActivityIds);
+    const hasSelectedInRow = ids.some((id) => selectedActivityIds.has(id));
+    if (selectedIds.length > 0 && hasSelectedInRow) {
+      return selectedIds;
+    }
+    return ids;
+  }, [selectedActivityIds]);
 
   const handleDrop = useCallback(async (projectId: number, ids: number[]) => {
     if (projectId < 1 || ids.length === 0) return;
@@ -618,7 +803,31 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     if (proj) showToast(proj.name, proj.color, ids.length);
     const suggestion = suggestions.find((s): s is RuleSuggestion => s !== null);
     if (suggestion) setRuleSuggestion(suggestion);
-  }, [assignToProject, projects, showToast]);
+    if (ids.some((id) => selectedActivityIds.has(id))) {
+      clearSelectedActivities();
+    }
+  }, [assignToProject, clearSelectedActivities, projects, selectedActivityIds, showToast]);
+
+  const handleBulkClearProject = useCallback(async () => {
+    const ids = Array.from(selectedActivityIds);
+    if (ids.length === 0) return;
+    await Promise.all(ids.map((id) => unassignFromProject(id)));
+    clearSelectedActivities();
+  }, [clearSelectedActivities, selectedActivityIds, unassignFromProject]);
+  const handleBulkDelete = useCallback(async () => {
+    const ids = Array.from(selectedActivityIds);
+    if (ids.length === 0) return;
+    await Promise.all(ids.map((id) => deleteActivity(id)));
+    clearSelectedActivities();
+  }, [clearSelectedActivities, deleteActivity, selectedActivityIds]);
+
+  const handleBulkAssignSelected = useCallback(async () => {
+    const projectId = parseInt(bulkAssignProjectId, 10);
+    const ids = Array.from(selectedActivityIds);
+    if (!projectId || ids.length === 0) return;
+    await handleDrop(projectId, ids);
+    clearSelectedActivities();
+  }, [bulkAssignProjectId, selectedActivityIds, handleDrop, clearSelectedActivities]);
 
   const acceptRuleSuggestion = async () => {
     if (!ruleSuggestion) return;
@@ -667,7 +876,12 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
       if (e.button !== 0) return;
       if ((e.target as HTMLElement).closest('[data-no-drag="true"], button, input, select, textarea, label, a')) return;
-      dragPending.current = { ids, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId };
+      dragPending.current = {
+        ids: resolveDragIds(ids),
+        startX: e.clientX,
+        startY: e.clientY,
+        pointerId: e.pointerId,
+      };
       dragActiveIds.current = null;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
@@ -715,7 +929,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
       setGhost(null);
       dragState.clear();
     },
-  }), []);
+  }), [resolveDragIds]);
 
   const timelineBlocks = activities.filter((a) => a.ended_at !== null && a.duration_s !== null);
   const totalSecs = activities.reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
@@ -753,9 +967,28 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
             <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.68)', letterSpacing: '0.03em' }}>
               Activities
             </span>
-            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.32)', fontVariantNumeric: 'tabular-nums' }}>
-              {tree.length} {tree.length === 1 ? 'app' : 'apps'}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {activities.length > 0 && selectedActivityIds.size < activities.length && (
+                <button
+                  type="button"
+                  onClick={selectAllActivities}
+                  style={{
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '0.5px solid rgba(255,255,255,0.12)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    color: 'rgba(255,255,255,0.58)',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Select all
+                </button>
+              )}
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.32)', fontVariantNumeric: 'tabular-nums' }}>
+                {tree.length} {tree.length === 1 ? 'app' : 'apps'}
+              </span>
+            </div>
           </div>
 
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2 }}>
@@ -784,8 +1017,17 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                       className="activity-tree-row"
                       onMouseEnter={() => highlightActivityIds(app.activityIds)}
                       onMouseLeave={() => { clearActivityHighlight(); setDeleteConfirmKey(null); }}
-                      style={upro ? { borderLeft: `2.5px solid ${upro.color}88` } : undefined}
+                      style={{
+                        ...(upro ? { borderLeft: `2.5px solid ${upro.color}88` } : {}),
+                        ...(getSelectionState(app.activityIds, selectedActivityIds) !== 'none'
+                          ? { background: 'rgba(45,212,191,0.07)' }
+                          : {}),
+                      }}
                     >
+                      <SelectionToggle
+                        state={getSelectionState(app.activityIds, selectedActivityIds)}
+                        onToggle={() => toggleSelectedActivityIds(app.activityIds)}
+                      />
                       <span style={{
                         width: 48, textAlign: 'right', paddingRight: 10, flexShrink: 0,
                         fontSize: 11.5, color: 'rgba(255,255,255,0.38)',
@@ -800,13 +1042,13 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                       <span style={{
                         marginLeft: 7, fontSize: 13, fontWeight: 500,
                         color: 'rgba(255,255,255,0.85)',
-                        flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}>
-                        {displayAppName(app.appName)}
+                        <HoverText text={displayAppName(app.appName)} />
                       </span>
                       {upro && (
                         <span style={{
-                          display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                          display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto',
                           marginRight: 8,
                         }}>
                           <span style={{ width: 6, height: 6, borderRadius: '50%', background: upro.color }} />
@@ -840,8 +1082,17 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                           className="activity-tree-row"
                           onMouseEnter={() => highlightActivityIds(ctx.activityIds)}
                           onMouseLeave={() => { clearActivityHighlight(); setDeleteConfirmKey(null); }}
-                          style={{ paddingLeft: 62 }}
+                          style={{
+                            paddingLeft: 62,
+                            ...(getSelectionState(ctx.activityIds, selectedActivityIds) !== 'none'
+                              ? { background: 'rgba(45,212,191,0.07)' }
+                              : {}),
+                          }}
                         >
+                          <SelectionToggle
+                            state={getSelectionState(ctx.activityIds, selectedActivityIds)}
+                            onToggle={() => toggleSelectedActivityIds(ctx.activityIds)}
+                          />
                           <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center' }}>
                             {ctxOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                           </span>
@@ -851,13 +1102,13 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                           <span style={{
                             marginLeft: 5, fontSize: 12,
                             color: 'rgba(255,255,255,0.55)',
-                            flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                           }}>
-                            {ctx.context}
+                            <HoverText text={ctx.context} />
                           </span>
                           <span style={{
                             fontSize: 11, color: 'rgba(255,255,255,0.28)',
-                            flexShrink: 0, marginRight: 8,
+                            flexShrink: 0, marginLeft: 'auto', marginRight: 8,
                             fontVariantNumeric: 'tabular-nums',
                             minWidth: 48, textAlign: 'right', whiteSpace: 'nowrap',
                           }}>
@@ -887,10 +1138,17 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                           <div key={titleKey}>
                             <TitleGroupRow
                               tg={tg}
+                              tooltipText={
+                                titleActivities[0]
+                                  ? fullActivityLabel(titleActivities[0])
+                                  : (tg.title || 'Untitled')
+                              }
                               tpro={tpro ?? null}
                               paddingLeft={showCtxRow ? 86 : 62}
                               pointerDragProps={pointerDragProps}
                               expanded={titleOpen}
+                              selectionState={getSelectionState(tg.activityIds, selectedActivityIds)}
+                              onToggleSelect={() => toggleSelectedActivityIds(tg.activityIds)}
                               onToggle={tg.activityIds.length > 1 ? () => toggleTitle(titleKey) : undefined}
                               onEdit={editableActivity ? () => openEdit(editableActivity, tg.activityIds) : undefined}
                               onDelete={() => Promise.all(tg.activityIds.map((id) => deleteActivity(id)))}
@@ -906,6 +1164,8 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                                   project={apro}
                                   paddingLeft={showCtxRow ? 110 : 86}
                                   pointerDragProps={pointerDragProps}
+                                  selectionState={getSelectionState([activity.id], selectedActivityIds)}
+                                  onToggleSelect={() => toggleSelectedActivityIds([activity.id])}
                                   onEdit={() => openEdit(activity)}
                                   onDelete={() => deleteActivity(activity.id)}
                                   onHover={() => highlightActivityIds([activity.id])}
@@ -1058,7 +1318,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
       {/* Success toast */}
       {toast && createPortal(
         <div style={{
-          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          position: 'fixed', bottom: selectedActivityIds.size > 0 ? 104 : 24, left: '50%', transform: 'translateX(-50%)',
           zIndex: 4000, pointerEvents: 'none',
           display: 'flex', alignItems: 'center', gap: 9,
           background: 'rgba(10,26,20,0.97)',
@@ -1077,6 +1337,84 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.88)', fontWeight: 500 }}>
             {toast.msg}
           </span>
+        </div>,
+        document.body
+      )}
+
+      {selectedActivityIds.size > 0 && createPortal(
+        <div style={{
+          position: 'fixed',
+          left: '50%',
+          bottom: 24,
+          transform: 'translateX(-50%)',
+          zIndex: 4200,
+          width: 'min(680px, calc(100vw - 32px))',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            padding: '10px 12px',
+            borderRadius: 12,
+            background: 'rgba(8,22,17,0.96)',
+            border: '0.5px solid rgba(45,212,191,0.24)',
+            boxShadow: '0 18px 40px rgba(0,0,0,0.42)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            pointerEvents: 'auto',
+          }}>
+            <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.55)', flex: '1 1 140px' }}>
+              {selectedActivityIds.size} {selectedActivityIds.size === 1 ? 'activity selected' : 'activities selected'}
+            </span>
+            <Select
+              value={bulkAssignProjectId}
+              onChange={setBulkAssignProjectId}
+              options={[
+                { value: '', label: 'Assign to…' },
+                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+              ]}
+              placeholder="Assign to…"
+              style={{ minWidth: 160, fontSize: 11.5 }}
+            />
+            <button
+              className="btn-primary"
+              onClick={() => void handleBulkAssignSelected()}
+              disabled={!bulkAssignProjectId}
+              style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
+            >
+              Assign
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => void handleBulkClearProject()}
+              style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
+            >
+              No project
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => void handleBulkDelete()}
+              style={{
+                width: 'auto',
+                fontSize: 11.5,
+                padding: '6px 12px',
+                color: 'rgba(248,113,113,0.92)',
+                borderColor: 'rgba(239,68,68,0.26)',
+                background: 'rgba(239,68,68,0.08)',
+              }}
+            >
+              Delete
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={clearSelectedActivities}
+              style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
+            >
+              Clear
+            </button>
+          </div>
         </div>,
         document.body
       )}
@@ -1203,6 +1541,19 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <FieldLabel>Note (optional)</FieldLabel>
             <input className="glass-input" value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="Window title or note" style={{ fontSize: 12 }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <FieldLabel>Project</FieldLabel>
+            <Select
+              value={editProject}
+              onChange={setEditProject}
+              options={[
+                ...(editingTarget.activityIds.length > 1 ? [{ value: MIXED_PROJECT_VALUE, label: 'Keep existing projects' }] : []),
+                { value: '', label: 'No project' },
+                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+              ]}
+              placeholder="No project"
+            />
           </div>
           {editingTarget.activityIds.length === 1 ? (
             <div style={{ display: 'flex', gap: 10 }}>

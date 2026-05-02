@@ -36,6 +36,7 @@ interface ActivityStore {
   stepDate: (delta: -1 | 1) => void;
   goToToday: () => void;
   assignToProject: (activityId: number, projectId: number) => Promise<RuleSuggestion | null>;
+  unassignFromProject: (activityId: number) => Promise<void>;
   assignAllUnassignedToday: (projectId: number) => Promise<void>;
   deleteActivity: (activityId: number) => Promise<void>;
   updateActivity: (activityId: number, appName: string, windowTitle: string, startedAt: number, endedAt: number) => Promise<void>;
@@ -91,6 +92,11 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
     const suggestion = await invoke<RuleSuggestion | null>('assign_activity', { activityId, projectId });
     await get().fetchForDate(get().viewDate);
     return suggestion;
+  },
+
+  unassignFromProject: async (activityId) => {
+    await invoke('unassign_activity', { activityId });
+    await get().fetchForDate(get().viewDate);
   },
 
   assignAllUnassignedToday: async (projectId) => {

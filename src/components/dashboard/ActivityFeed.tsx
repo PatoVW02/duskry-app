@@ -96,6 +96,7 @@ export function ActivityFeed() {
   const activities      = useActivityStore((s) => s.activities).slice(0, 50);
   const viewDate        = useActivityStore((s) => s.viewDate);
   const assignToProject = useActivityStore((s) => s.assignToProject);
+  const unassignFromProject = useActivityStore((s) => s.unassignFromProject);
   const assignAllUnassignedToday = useActivityStore((s) => s.assignAllUnassignedToday);
   const deleteActivity  = useActivityStore((s) => s.deleteActivity);
   const updateActivity  = useActivityStore((s) => s.updateActivity);
@@ -247,6 +248,7 @@ export function ActivityFeed() {
             activity={a}
             projects={projects}
             onAssign={(pid) => assignToProject(a.id, pid)}
+            onUnassign={() => unassignFromProject(a.id)}
             onEdit={() => openEdit(a)}
             onDelete={() => deleteActivity(a.id)}
           />
@@ -336,12 +338,14 @@ function ActivityRow({
   activity: a,
   projects,
   onAssign,
+  onUnassign,
   onEdit,
   onDelete,
 }: {
   activity: Activity;
   projects: Project[];
   onAssign: (pid: number) => void;
+  onUnassign: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -349,7 +353,10 @@ function ActivityRow({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const proj = projects.find((p: Project) => p.id === a.project_id);
   const time = format(fromUnixTime(a.started_at), 'HH:mm');
-  const projectOptions = projects.map((p: Project) => ({ value: String(p.id!), label: p.name }));
+  const projectOptions = [
+    { value: '', label: 'No project' },
+    ...projects.map((p: Project) => ({ value: String(p.id!), label: p.name })),
+  ];
 
   return (
     <div
@@ -379,7 +386,7 @@ function ActivityRow({
         <div data-no-edit="true" onClick={(e) => e.stopPropagation()}>
           <Select
             value={a.project_id ? String(a.project_id) : ''}
-            onChange={(v) => { if (v) onAssign(parseInt(v)); }}
+            onChange={(v) => { if (v) onAssign(parseInt(v, 10)); else onUnassign(); }}
             options={projectOptions}
             placeholder="Assign…"
             style={{
