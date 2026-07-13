@@ -58,9 +58,9 @@ This repo uses a split release flow:
 
 ### 1. Bump the version
 
-Before releasing, update the desktop app version in [package.json](/Users/patricio/Development/Personal/Apps/Duskry/App/package.json). The current version is `0.6.1`.
+Before releasing, update the desktop app version in `package.json`. The current version is `1.0.7`.
 
-The macOS release script will sync that same version into [src-tauri/tauri.conf.json](/Users/patricio/Development/Personal/Apps/Duskry/App/src-tauri/tauri.conf.json) automatically, but it does not bump the version for you.
+The macOS release script syncs that version into `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, then validates configuration before building.
 
 ### 2. Build and publish the macOS release
 
@@ -81,7 +81,7 @@ This runs [scripts/release-mac.sh](/Users/patricio/Development/Personal/Apps/Dus
   - `aarch64-apple-darwin`
   - `x86_64-apple-darwin`
   - `universal-apple-darwin`
-- Creates and pushes a Git tag like `v0.6.1`
+- Creates and pushes a Git tag like `v1.0.7`
 - Creates a GitHub release
 - Uploads:
   - `Duskry_arm64.dmg`
@@ -124,7 +124,8 @@ These are required when running `npm run release` locally on macOS:
 
 | Item | Purpose |
 | --- | --- |
-| Apple signing identity in Keychain | Used by Tauri during macOS bundle/signing steps |
+| Developer ID Application identity in Keychain | Signs direct-download macOS builds for Gatekeeper |
+| Apple notarization credentials | Submits and staples each build before publication |
 | `gh` authenticated | Creates the GitHub release and uploads assets |
 | `App/duskry.key` | Private updater signing key used to generate updater signatures |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the updater signing key |
@@ -155,6 +156,10 @@ Based on [.env.example](/Users/patricio/Development/Personal/Apps/Duskry/App/.en
 | `VITE_CHECKOUT_PROPLUS_MONTHLY` | Lemon Squeezy checkout URL for Pro+ monthly |
 | `VITE_CHECKOUT_PROPLUS_YEARLY` | Lemon Squeezy checkout URL for Pro+ yearly |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the updater signing key used during release builds |
+| `DUSKRY_VARIANT_*` | Stable Lemon Squeezy variant IDs used for native tier mapping |
+| `APPLE_SIGNING_IDENTITY` | Exact Developer ID Application identity; auto-detected when omitted |
+| `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` | Preferred App Store Connect notarization credentials |
+| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Alternative Apple ID notarization credentials |
 
 ### Landing page: `Landing/.env.local`
 

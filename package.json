@@ -1,12 +1,15 @@
 {
   "name": "duskry",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "check:config": "node scripts/validate-config.mjs",
+    "test": "vitest",
+    "test:run": "vitest run",
     "sync:tauri-config": "node scripts/sync-tauri-config.mjs",
     "tauri": "npm run sync:tauri-config && tauri",
     "release": "bash scripts/release-mac.sh",
@@ -27,8 +30,8 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^1.8.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.4",
@@ -40,6 +43,10 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "7.3.6",
+    "vitest": "3.2.7"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
   }
 }

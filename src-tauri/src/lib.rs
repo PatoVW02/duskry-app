@@ -374,6 +374,12 @@ fn get_license_tier() -> String {
 }
 
 #[tauri::command]
+async fn refresh_license_tier() -> Result<String, String> {
+    let tier = license::refresh_license_online().await?;
+    Ok(tier.as_str().to_string())
+}
+
+#[tauri::command]
 async fn validate_license(key: String) -> Result<String, String> {
     let tier = license::validate_license_online(&key).await?;
     Ok(tier.as_str().to_string())
@@ -391,7 +397,7 @@ async fn remove_license() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn start_trial(email: String, expires_at: i64) -> Result<(), String> {
+fn start_trial(email: String) -> Result<i64, String> {
     let already_started = db::get_setting("trial_started_at")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0)
@@ -401,13 +407,13 @@ fn start_trial(email: String, expires_at: i64) -> Result<(), String> {
     }
 
     db::set_setting("trial_email", &email).map_err(|e| e.to_string())?;
-    db::set_setting(
-        "trial_started_at",
-        &chrono::Utc::now().timestamp().to_string(),
-    )
+    let started_at = chrono::Utc::now().timestamp();
+    let expires_at = started_at + 7 * 24 * 60 * 60;
+    db::set_setting("trial_started_at", &started_at.to_string())
     .map_err(|e| e.to_string())?;
     db::set_setting("trial_expires_at", &expires_at.to_string()).map_err(|e| e.to_string())?;
-    db::set_setting("trial_status", "active").map_err(|e| e.to_string())
+    db::set_setting("trial_status", "active").map_err(|e| e.to_string())?;
+    Ok(expires_at)
 }
 
 #[tauri::command]
@@ -662,6 +668,7 @@ pub fn run() {
             get_setting,
             set_setting,
             get_license_tier,
+            refresh_license_tier,
             validate_license,
             can_deactivate_license,
             remove_license,

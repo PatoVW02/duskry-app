@@ -59,7 +59,8 @@ function App() {
   const closeScenePreview = useSettingsStore((s) => s.closeScenePreview);
   const setScene = useSettingsStore((s) => s.setScene);
   const setSceneAuto = useSettingsStore((s) => s.setSceneAuto);
-  const { tier, fetchTier } = useLicenseStore();
+  const tier = useLicenseStore((s) => s.tier);
+  const fetchTier = useLicenseStore((s) => s.fetchTier);
   const fetchProjects = useProjectStore((s) => s.fetchProjects);
   const fetchPrices = usePricesStore((s) => s.fetchPrices);
   const viewDate = useActivityStore((s) => s.viewDate);
@@ -104,6 +105,16 @@ function App() {
     fetchProjects();
     fetchPrices();
   }, [loadSettings, fetchTier, fetchProjects, fetchPrices]);
+
+  useEffect(() => {
+    const refresh = () => void fetchTier();
+    const interval = window.setInterval(refresh, 6 * 60 * 60 * 1000);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [fetchTier]);
 
   // Start tracking loop for returning users (new users start it in AllSetScreen)
   const prevOnboardingComplete = useRef(onboardingComplete);

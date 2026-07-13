@@ -7,6 +7,8 @@ use std::sync::Mutex;
 static DB: Lazy<Mutex<Connection>> = Lazy::new(|| {
     let path = get_db_path();
     let conn = Connection::open(&path).expect("Failed to open database");
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .expect("Failed to enable foreign keys");
     init_schema(&conn).expect("Failed to init schema");
     Mutex::new(conn)
 });
@@ -101,6 +103,12 @@ fn init_schema(conn: &Connection) -> Result<()> {
         INSERT OR IGNORE INTO settings VALUES ('scene_auto_schedule',  '[{"startMinutes":0,"scene":"arctic-night"},{"startMinutes":300,"scene":"golden-meadow"},{"startMinutes":480,"scene":"alpine-day"},{"startMinutes":720,"scene":"coastal-breeze"},{"startMinutes":1020,"scene":"ocean-sunset"},{"startMinutes":1200,"scene":"night-mountains"}]');
         INSERT OR IGNORE INTO settings VALUES ('auto_rule_suggestions_enabled', 'true');
         INSERT OR IGNORE INTO settings VALUES ('auto_create_suggested_rules_enabled', 'false');
+
+        CREATE INDEX IF NOT EXISTS idx_activities_started_at ON activities(started_at);
+        CREATE INDEX IF NOT EXISTS idx_activities_ended_at ON activities(ended_at);
+        CREATE INDEX IF NOT EXISTS idx_assignments_project_id ON assignments(project_id);
+        CREATE INDEX IF NOT EXISTS idx_rules_project_priority ON rules(project_id, priority);
+        CREATE INDEX IF NOT EXISTS idx_learning_signals_updated ON rule_learning_signals(updated_at);
     "#,
     )?;
     ensure_column(
@@ -306,7 +314,8 @@ fn get_activities_in_range_conn(
                ass.project_id, ass.source
         FROM activities a
         LEFT JOIN assignments ass ON ass.activity_id = a.id
-        WHERE a.started_at >= ?1 AND a.started_at <= ?2
+        WHERE a.started_at <= ?2
+          AND COALESCE(a.ended_at, unixepoch()) >= ?1
         ORDER BY a.started_at DESC
     "#,
     )?;

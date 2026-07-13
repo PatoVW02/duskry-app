@@ -11,19 +11,19 @@ export type CheckoutKey = keyof typeof CHECKOUT_URLS;
 export type YearlyCheckoutKey = 'pro_yearly' | 'proplus_yearly';
 
 /** Open a LemonSqueezy checkout. Optionally pre-fills the customer email via query param. */
-export function openCheckout(key: CheckoutKey, email?: string) {
-  let url = CHECKOUT_URLS[key];
-  if (!url) {
-    console.error(`[checkout] Missing env var for key: ${key}`);
-    return;
-  }
-  if (email) {
-    url = `${url}?checkout[email]=${email}`;
-  }
-  invoke('open_url', { url });
+export function buildCheckoutUrl(rawUrl: string, email?: string): string {
+  const url = new URL(rawUrl);
+  if (email) url.searchParams.set('checkout[email]', email);
+  return url.toString();
+}
+
+export async function openCheckout(key: CheckoutKey, email?: string): Promise<void> {
+  const rawUrl = CHECKOUT_URLS[key];
+  if (!rawUrl) throw new Error(`Checkout is not configured for ${key.replace(/_/g, ' ')}.`);
+  await invoke('open_url', { url: buildCheckoutUrl(rawUrl, email) });
 }
 
 /** Alias for annual plan checkouts — same as openCheckout but typed to yearly keys only. */
-export function openAnnualCheckout(key: YearlyCheckoutKey, email?: string) {
-  openCheckout(key, email);
+export async function openAnnualCheckout(key: YearlyCheckoutKey, email?: string): Promise<void> {
+  await openCheckout(key, email);
 }

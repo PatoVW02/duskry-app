@@ -26,6 +26,8 @@ export function PaywallModal() {
   const [keyError, setKeyError] = useState('');
   const [keyLoading, setKeyLoading] = useState(false);
   const [downgrading, setDowngrading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   if (!billingPlansEnabled || tier !== 'expired') return null;
 
@@ -48,10 +50,18 @@ export function PaywallModal() {
       try { await downgradeFree(); } finally { setDowngrading(false); }
       return;
     }
-    if (billing === 'yearly') {
-      openAnnualCheckout(chosen === 'proPlus' ? 'proplus_yearly' : 'pro_yearly', trialEmail || undefined);
-    } else {
-      openCheckout(chosen === 'proPlus' ? 'proplus_monthly' : 'pro_monthly', trialEmail || undefined);
+    setCheckoutLoading(true);
+    setCheckoutError('');
+    try {
+      if (billing === 'yearly') {
+        await openAnnualCheckout(chosen === 'proPlus' ? 'proplus_yearly' : 'pro_yearly', trialEmail || undefined);
+      } else {
+        await openCheckout(chosen === 'proPlus' ? 'proplus_monthly' : 'pro_monthly', trialEmail || undefined);
+      }
+    } catch (error) {
+      setCheckoutError(errorMessage(error, 'Could not open checkout.'));
+    } finally {
+      setCheckoutLoading(false);
     }
   };
 
@@ -186,13 +196,14 @@ export function PaywallModal() {
         </div>
 
         {/* CTA */}
+        {checkoutError && <div role="alert" style={{ fontSize: 12, color: '#f87171', textAlign: 'center' }}>{checkoutError}</div>}
         <button
           className={chosen === 'free' ? 'btn-secondary' : 'btn-primary'}
           onClick={handleContinue}
-          disabled={downgrading}
+          disabled={downgrading || checkoutLoading}
           style={{ fontSize: 13.5 }}
         >
-          {downgrading
+          {downgrading || checkoutLoading
             ? 'Applying…'
             : chosen === 'free'
               ? 'Continue with Free'
@@ -203,9 +214,9 @@ export function PaywallModal() {
         {!showKeyInput ? (
           <div style={{ textAlign: 'center', fontSize: 12, color: 'rgba(255,255,255,0.35)', marginTop: -8 }}>
             Already subscribed?{' '}
-            <span style={{ color: 'rgba(45,212,191,0.65)', cursor: 'pointer' }} onClick={() => setShowKeyInput(true)}>
+            <button type="button" style={{ color: 'rgba(45,212,191,0.65)', cursor: 'pointer', border: 0, background: 'transparent', padding: 0, font: 'inherit' }} onClick={() => setShowKeyInput(true)}>
               Enter your license key
-            </span>
+            </button>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: -8 }}>

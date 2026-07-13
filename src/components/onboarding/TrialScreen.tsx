@@ -6,9 +6,6 @@ import { billingPlansEnabled } from '../../lib/featureFlags';
 
 interface Props { onNext: () => void; }
 
-const TRIAL_API = 'https://duskry.app/api/trial/start';
-const TRIAL_DURATION_SECS = 7 * 24 * 60 * 60;
-
 export function TrialScreen({ onNext }: Props) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,20 +24,7 @@ export function TrialScreen({ onNext }: Props) {
     setLoading(true);
     setError('');
     try {
-      // Best-effort server registration - proceed even if it fails
-      let expiresAt = Math.floor(Date.now() / 1000) + TRIAL_DURATION_SECS;
-      try {
-        const res = await fetch(TRIAL_API, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          expiresAt = Math.floor(data.expires_at / 1000);
-        }
-      } catch {}
-      await startTrial(email, expiresAt);
+      await startTrial(email);
       onNext();
     } catch (e) {
       setError(errorMessage(e, 'Something went wrong'));

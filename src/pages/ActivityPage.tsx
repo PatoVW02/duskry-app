@@ -8,6 +8,7 @@ import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { formatDuration } from '../lib/utils';
 import { dragState } from '../lib/dragState';
+import { normalizeTimelineActivities } from '../lib/activityPresentation';
 import { Select } from '../components/ui/Select';
 
 // ── Tree types ─────────────────────────────────────────────────────────────
@@ -184,7 +185,7 @@ function getSelectionState(activityIds: number[], selectedIds: Set<number>): Sel
 
 const HOUR_HEIGHT = 88;
 const GUTTER      = 48;
-const MIN_TIMELINE_BLOCK_HEIGHT = 18;
+const MIN_TIMELINE_BLOCK_HEIGHT = 2;
 
 function formatHour(h: number): string {
   if (h === 0)  return '12am';
@@ -625,6 +626,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [ruleSuggestion, setRuleSuggestion] = useState<RuleSuggestion | null>(null);
   const [selectedActivityIds, setSelectedActivityIds] = useState<Set<number>>(() => new Set());
   const [bulkAssignProjectId, setBulkAssignProjectId] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'summary' | 'details'>('summary');
 
   // ── edit state ────────────────────────────────────────────────────────
   const [editingTarget, setEditingTarget] = useState<EditTarget | null>(null);
@@ -738,12 +740,6 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     const targetHour = isToday(viewDate) ? Math.max(0, new Date().getHours() - 3) : 8;
     scrollRef.current.scrollTop = targetHour * HOUR_HEIGHT;
   }, [viewDate]);
-
-  // Auto-expand top apps on first load
-  useEffect(() => {
-    const tree = buildTree(activities);
-    setExpandedApps(new Set(tree.slice(0, 5).map((a) => a.appName)));
-  }, [activities.length]);
 
   useEffect(() => {
     const visibleIds = new Set(activities.map((activity) => activity.id));
@@ -931,7 +927,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     },
   }), [resolveDragIds]);
 
-  const timelineBlocks = activities.filter((a) => a.ended_at !== null && a.duration_s !== null);
+  const timelineBlocks = normalizeTimelineActivities(activities);
   const totalSecs = activities.reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
   const showTimeline = isPro(tier);
 
@@ -968,6 +964,28 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
               Activities
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div role="group" aria-label="Activity detail level" style={{ display: 'flex', padding: 2, borderRadius: 7, background: 'rgba(255,255,255,0.045)' }}>
+                {(['summary', 'details'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={viewMode === mode}
+                    onClick={() => setViewMode(mode)}
+                    style={{
+                      border: 0,
+                      borderRadius: 5,
+                      padding: '3px 8px',
+                      background: viewMode === mode ? 'rgba(255,255,255,0.10)' : 'transparent',
+                      color: viewMode === mode ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.36)',
+                      fontSize: 10.5,
+                      textTransform: 'capitalize',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
               {activities.length > 0 && selectedActivityIds.size < activities.length && (
                 <button
                   type="button"
@@ -1013,7 +1031,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                   const upro = upid ? projects.find((p) => p.id === upid) : null;
                   return (
                     <div
-                      {...pointerDragProps(app.activityIds, { onPress: () => toggleApp(app.appName) })}
+                      {...pointerDragProps(app.activityIds, { onPress: viewMode === 'details' ? () => toggleApp(app.appName) : undefined })}
                       className="activity-tree-row"
                       onMouseEnter={() => highlightActivityIds(app.activityIds)}
                       onMouseLeave={() => { clearActivityHighlight(); setDeleteConfirmKey(null); }}
@@ -1036,7 +1054,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                         {formatDuration(app.total_s)}
                       </span>
                       <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.30)', display: 'flex', alignItems: 'center' }}>
-                        {appOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                        {viewMode === 'details' && (appOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />)}
                       </span>
                       <AppIcon name={app.appName} />
                       <span style={{
@@ -1069,7 +1087,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                   );
                 })()}
 
-                {appOpen && app.contexts.map((ctx) => {
+                {viewMode === 'details' && appOpen && app.contexts.map((ctx) => {
                   const ctxKey  = `${app.appName}::${ctx.context}`;
                   const ctxOpen = expandedCtx.has(ctxKey);
                   const showCtxRow = hasContext && ctx.context !== '';

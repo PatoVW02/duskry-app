@@ -18,9 +18,11 @@ interface LicenseStore {
   trialEmail: string;
   /** The plan the user chose during onboarding (persisted). */
   selectedPlan: SelectedPlan;
+  refreshing: boolean;
+  lastError: string | null;
   fetchTier: () => Promise<void>;
   setSelectedPlan: (plan: SelectedPlan) => Promise<void>;
-  startTrial: (email: string, expiresAt: number) => Promise<void>;
+  startTrial: (email: string) => Promise<void>;
   cancelTrial: () => Promise<void>;
   downgradeFree: () => Promise<void>;
   activateLicense: (key: string) => Promise<void>;
@@ -34,10 +36,19 @@ export const useLicenseStore = create<LicenseStore>((set, get) => ({
   trialStartedAt: 0,
   trialEmail: '',
   selectedPlan: 'pro',
+  refreshing: false,
+  lastError: null,
 
   fetchTier: async () => {
+    set({ refreshing: true, lastError: null });
     try {
-      const tier = await invoke<string>('get_license_tier');
+      let tier: string;
+      try {
+        tier = await invoke<string>('refresh_license_tier');
+      } catch (error) {
+        console.warn('[license] Online refresh failed; using offline entitlement.', error);
+        tier = await invoke<string>('get_license_tier');
+      }
       const expiresStr = await invoke<string | null>('get_setting', { key: 'trial_expires_at' });
       const startedStr = await invoke<string | null>('get_setting', { key: 'trial_started_at' });
       const email = await invoke<string | null>('get_setting', { key: 'trial_email' });
@@ -48,8 +59,12 @@ export const useLicenseStore = create<LicenseStore>((set, get) => ({
         trialStartedAt: parseInt(startedStr ?? '0'),
         trialEmail: email ?? '',
         selectedPlan: (plan ?? 'pro') as SelectedPlan,
+        refreshing: false,
       });
-    } catch {}
+    } catch (error) {
+      console.error('[license] Could not load entitlement state.', error);
+      set({ refreshing: false, lastError: String(error) });
+    }
   },
 
   setSelectedPlan: async (plan) => {
@@ -57,8 +72,8 @@ export const useLicenseStore = create<LicenseStore>((set, get) => ({
     set({ selectedPlan: plan });
   },
 
-  startTrial: async (email, expiresAt) => {
-    await invoke('start_trial', { email, expiresAt });
+  startTrial: async (email) => {
+    const expiresAt = await invoke<number>('start_trial', { email });
     set({ tier: 'proTrial', trialExpiresAt: expiresAt, trialStartedAt: Math.floor(Date.now() / 1000), trialEmail: email });
   },
 

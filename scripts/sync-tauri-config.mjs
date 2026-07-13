@@ -8,6 +8,7 @@ const rootDir = path.resolve(__dirname, '..');
 
 const packageJsonPath = path.join(rootDir, 'package.json');
 const tauriConfigPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
+const cargoTomlPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
 const publicKeyPath = path.join(rootDir, 'duskry.key.pub');
 
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
@@ -31,5 +32,16 @@ tauriConfig.plugins.updater.pubkey = publicKey;
 
 fs.writeFileSync(tauriConfigPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
 
+const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
+const syncedCargoToml = cargoToml.replace(
+  /(\[package\][\s\S]*?\nversion\s*=\s*)"[^"]+"/,
+  `$1"${packageJson.version}"`,
+);
+if (syncedCargoToml === cargoToml && !cargoToml.includes(`version = "${packageJson.version}"`)) {
+  throw new Error('Could not locate the Cargo package version');
+}
+fs.writeFileSync(cargoTomlPath, syncedCargoToml);
+
 console.log(`Synced tauri.conf.json version -> ${packageJson.version}`);
+console.log(`Synced Cargo.toml version -> ${packageJson.version}`);
 console.log('Synced tauri.conf.json updater pubkey -> duskry.key.pub');

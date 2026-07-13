@@ -378,10 +378,24 @@ fn tracking_worker_loop(generation: u64) {
                 }
             }
 
-            let changed = last
+            let window_changed = last
                 .as_ref()
                 .map(|w| w.app_name != current.app_name || w.window_title != current.window_title)
                 .unwrap_or(true);
+
+            // Browser tabs can navigate without changing the window title. Refresh
+            // their URL every 15 seconds so domain rules and reports do not go stale.
+            let should_refresh_url = window_changed || tick_count % 3 == 0;
+            if should_refresh_url {
+                current.url = get_browser_url(&current.app_name);
+                if current.url.is_none() && !window_changed {
+                    current.url = last.as_ref().and_then(|w| w.url.clone());
+                }
+            } else if let Some(ref prev) = last {
+                current.url = prev.url.clone();
+            }
+            let changed = window_changed
+                || last.as_ref().map(|w| w.url != current.url).unwrap_or(false);
 
             // Periodic same-window tick log (every 15 s) so we can see the loop
             // is alive and what osascript is reporting even with no state changes.
@@ -395,21 +409,12 @@ fn tracking_worker_loop(generation: u64) {
                 ));
             }
 
-            if changed {
-                // Only fetch the browser URL when the window actually changed —
-                // this is the expensive osascript call (up to 2 s) and is
-                // pointless on ticks where nothing has switched.
-                current.url = get_browser_url(&current.app_name);
-                if WORKER_GENERATION.load(Ordering::SeqCst) != generation {
-                    crate::logger::tlog(&format!(
-                        "Tracker worker #{} exiting after stale URL check",
-                        generation
-                    ));
-                    break;
-                }
-            } else if let Some(ref prev) = last {
-                // Reuse the URL from the previous tick (same window).
-                current.url = prev.url.clone();
+            if WORKER_GENERATION.load(Ordering::SeqCst) != generation {
+                crate::logger::tlog(&format!(
+                    "Tracker worker #{} exiting after stale URL check",
+                    generation
+                ));
+                break;
             }
 
             // Update the cache so get_current_window() can read it without
@@ -646,13 +651,14 @@ tell application "System Events"
             set frontDocument to value of attribute "AXDocument" of frontWindow
         end try
     end try
-    return frontApp & "|" & frontTitle & "|" & frontDocument
+    set separatorCharacter to ASCII character 31
+    return frontApp & separatorCharacter & frontTitle & separatorCharacter & frontDocument
 end tell
     "#,
         Duration::from_secs(3),
     )?;
 
-    let parts: Vec<&str> = result.splitn(3, '|').collect();
+    let parts: Vec<&str> = result.splitn(3, '\u{1f}').collect();
     let app_name = parts.get(0).unwrap_or(&"").trim().to_string();
     if app_name.is_empty() {
         return None;
@@ -758,13 +764,13 @@ pub fn get_active_window() -> Option<ActiveWindow> {
         let app_name = std::path::Path::new(&full_path)
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or(full_path);
+            .unwrap_or_else(|| full_path.clone());
 
         Some(ActiveWindow {
             app_name,
             window_title,
             url: None,
-            file_path: None,
+            file_path: (!full_path.is_empty()).then_some(full_path),
             timestamp: chrono::Utc::now().timestamp(),
         })
     }

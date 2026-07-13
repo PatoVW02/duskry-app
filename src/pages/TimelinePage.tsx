@@ -5,6 +5,7 @@ import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { formatDuration } from '../lib/utils';
+import { normalizeTimelineActivities } from '../lib/activityPresentation';
 import { CalendarDays } from 'lucide-react';
 
 const HOUR_HEIGHT = 60; // px per hour
@@ -137,7 +138,7 @@ function TimelineContent() {
   }, [viewDate]);
 
   const hours  = Array.from({ length: 24 }, (_, i) => i);
-  const blocks = activities.filter((a) => a.ended_at !== null && a.duration_s !== null);
+  const blocks = normalizeTimelineActivities(activities);
   const totalSecs = activities.reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
 
   return (
@@ -198,7 +199,7 @@ function TimelineContent() {
           {/* Activity blocks */}
           {blocks.map((a) => {
             const top    = Math.max(0, tsToY(a.started_at));
-            const height = Math.max(22, (a.duration_s! / 3600) * HOUR_HEIGHT);
+            const height = Math.max(2, (a.duration_s! / 3600) * HOUR_HEIGHT);
             const proj   = projects.find((p) => p.id === a.project_id);
             const color  = proj?.color ?? 'rgba(255,255,255,0.18)';
 

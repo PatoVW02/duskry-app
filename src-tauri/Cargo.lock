@@ -1103,7 +1103,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "duskry"
-version = "0.6.1"
+version = "1.0.7"
 dependencies = [
  "aes-gcm",
  "chrono",
@@ -1113,6 +1113,7 @@ dependencies = [
  "hmac",
  "once_cell",
  "pbkdf2",
+ "rand 0.8.6",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

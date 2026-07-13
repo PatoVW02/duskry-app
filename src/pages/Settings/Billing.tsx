@@ -22,7 +22,6 @@ const PLAN_LABEL: Record<SelectedPlan, string> = {
 };
 
 const TRIAL_DURATION_DAYS = 7;
-const TRIAL_DURATION_SECS = TRIAL_DURATION_DAYS * 24 * 60 * 60;
 
 type CellVal = string | boolean;
 const COMPARISON_ROWS: { label: string; free: CellVal; pro: CellVal; proPlus: CellVal }[] = [
@@ -47,6 +46,8 @@ export function Billing() {
   const cancelTrial = useLicenseStore((s) => s.cancelTrial);
   const startTrial = useLicenseStore((s) => s.startTrial);
   const setSelectedPlan = useLicenseStore((s) => s.setSelectedPlan);
+  const fetchTier = useLicenseStore((s) => s.fetchTier);
+  const refreshing = useLicenseStore((s) => s.refreshing);
 
   const prices = usePricesStore((s) => s.prices);
 
@@ -102,11 +103,15 @@ export function Billing() {
     }
   };
 
-  const handleCheckout = (plan: 'pro' | 'proPlus', period: 'monthly' | 'yearly') => {
-    if (period === 'yearly') {
-      openAnnualCheckout(plan === 'proPlus' ? 'proplus_yearly' : 'pro_yearly', trialEmail || undefined);
-    } else {
-      openCheckout(plan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly', trialEmail || undefined);
+  const handleCheckout = async (plan: 'pro' | 'proPlus', period: 'monthly' | 'yearly') => {
+    try {
+      if (period === 'yearly') {
+        await openAnnualCheckout(plan === 'proPlus' ? 'proplus_yearly' : 'pro_yearly', trialEmail || undefined);
+      } else {
+        await openCheckout(plan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly', trialEmail || undefined);
+      }
+    } catch (error) {
+      setTrialError(errorMessage(error, 'Could not open checkout.'));
     }
   };
 
@@ -128,8 +133,7 @@ export function Billing() {
     setTrialError('');
     try {
       await setSelectedPlan(trialPlan);
-      const expiresAt = Math.floor(Date.now() / 1000) + TRIAL_DURATION_SECS;
-      await startTrial(trialEmail, expiresAt);
+      await startTrial(trialEmail);
     } catch (e) {
       setTrialError(errorMessage(e, 'Could not start free trial.'));
     } finally {
@@ -191,6 +195,12 @@ export function Billing() {
               onAction={openPortal}
               icon={<ExternalLink size={11} />}
               highlight
+            />
+            <ActionRow
+              label="Refresh subscription status"
+              description="Check Lemon Squeezy now after changing, renewing, or cancelling a plan"
+              buttonLabel={refreshing ? 'Refreshing…' : 'Refresh'}
+              onAction={() => void fetchTier()}
             />
             <ActionRow
               label="Payment, invoices, or cancellation"

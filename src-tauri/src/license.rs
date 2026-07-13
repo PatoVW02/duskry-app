@@ -4,6 +4,7 @@ use aes_gcm::{
 };
 use chrono::Utc;
 use hmac::{Hmac, Mac};
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -139,9 +140,16 @@ fn read_cache() -> Option<LicenseCache> {
     let raw_key = derive_key(&machine_id);
     let key = Key::<Aes256Gcm>::from_slice(&raw_key);
     let cipher = Aes256Gcm::new(key);
-    let nonce_bytes = b"duskry-nonce";
-    let nonce = Nonce::from_slice(nonce_bytes);
-    let plaintext = cipher.decrypt(nonce, data.as_ref()).ok()?;
+    // Current format is nonce || ciphertext. Fall back to the pre-1.0.7
+    // fixed-nonce format so existing customers can migrate on refresh.
+    let plaintext = if data.len() > 12 {
+        cipher
+            .decrypt(Nonce::from_slice(&data[..12]), &data[12..])
+            .ok()
+    } else {
+        None
+    }
+    .or_else(|| cipher.decrypt(Nonce::from_slice(b"duskry-nonce"), data.as_ref()).ok())?;
     serde_json::from_slice(&plaintext).ok()
 }
 
@@ -162,13 +170,16 @@ pub fn write_cache_with_instance(
     let raw_key = derive_key(&machine_id);
     let aes_key = Key::<Aes256Gcm>::from_slice(&raw_key);
     let cipher = Aes256Gcm::new(aes_key);
-    let nonce_bytes = b"duskry-nonce";
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
     let plaintext = serde_json::to_vec(&cache).map_err(|e| e.to_string())?;
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
         .map_err(|e| e.to_string())?;
-    std::fs::write(cache_path(), ciphertext).map_err(|e| e.to_string())
+    let mut payload = nonce_bytes.to_vec();
+    payload.extend(ciphertext);
+    std::fs::write(cache_path(), payload).map_err(|e| e.to_string())
 }
 
 pub fn clear_cache() {
@@ -191,11 +202,87 @@ pub struct LSInstance {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LSMeta {
+    #[serde(default)]
     pub product_name: String,
+    #[serde(default)]
     pub variant_name: Option<String>,
+    #[serde(default)]
+    pub variant_id: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LSValidateResponse {
+    valid: bool,
+    error: Option<String>,
+    instance: Option<LSInstance>,
+    meta: Option<LSMeta>,
+}
+
+fn tier_from_meta(meta: Option<&LSMeta>) -> Result<&'static str, String> {
+    let meta = meta.ok_or_else(|| "The license response did not include a plan.".to_string())?;
+    let variant = meta.variant_id.map(|id| id.to_string());
+    if variant.as_deref().is_some_and(|id| {
+        [option_env!("DUSKRY_VARIANT_PROPLUS_MONTHLY"), option_env!("DUSKRY_VARIANT_PROPLUS_YEARLY")]
+            .into_iter().flatten().any(|configured| configured == id)
+    }) {
+        return Ok("proplus");
+    }
+    if variant.as_deref().is_some_and(|id| {
+        [option_env!("DUSKRY_VARIANT_PRO_MONTHLY"), option_env!("DUSKRY_VARIANT_PRO_YEARLY")]
+            .into_iter().flatten().any(|configured| configured == id)
+    }) {
+        return Ok("pro");
+    }
+
+    // Compatibility for local/dev builds made before variant IDs were required.
+    let label = format!("{} {}", meta.product_name, meta.variant_name.as_deref().unwrap_or(""));
+    let label = label.to_lowercase();
+    if label.contains("pro+") || label.contains("proplus") || label.contains("pro plus") {
+        Ok("proplus")
+    } else if label.contains("pro") {
+        Ok("pro")
+    } else {
+        Err("This license belongs to an unknown Duskry plan. Please contact support.".to_string())
+    }
+}
+
+fn app_tier(tier: &str) -> AppTier {
+    if tier == "proplus" { AppTier::ProPlus } else { AppTier::Pro }
+}
+
+async fn validate_existing(cache: &LicenseCache) -> Result<AppTier, String> {
+    let mut form = vec![("license_key", cache.key.as_str())];
+    if let Some(instance_id) = cache.instance_id.as_deref() {
+        form.push(("instance_id", instance_id));
+    }
+    let response = reqwest::Client::new()
+        .post("https://api.lemonsqueezy.com/v1/licenses/validate")
+        .header("Accept", "application/json")
+        .form(&form)
+        .send().await.map_err(|e| format!("Could not reach Lemon Squeezy: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("License server returned {}.", response.status()));
+    }
+    let body = response.json::<LSValidateResponse>().await.map_err(|e| e.to_string())?;
+    if !body.valid {
+        clear_cache();
+        return Err(body.error.unwrap_or_else(|| "This license is no longer valid.".to_string()));
+    }
+    let tier = tier_from_meta(body.meta.as_ref())?;
+    let instance_id = body.instance.map(|instance| instance.id).or_else(|| cache.instance_id.clone());
+    write_cache_with_instance(&cache.key, tier, instance_id)?;
+    Ok(app_tier(tier))
+}
+
+pub async fn refresh_license_online() -> Result<AppTier, String> {
+    let Some(cache) = read_cache() else { return Ok(get_effective_tier()); };
+    validate_existing(&cache).await
 }
 
 pub async fn validate_license_online(license_key: &str) -> Result<AppTier, String> {
+    if let Some(cache) = read_cache().filter(|cache| cache.key == license_key && cache.instance_id.is_some()) {
+        return validate_existing(&cache).await;
+    }
     let client = reqwest::Client::new();
     let machine_id = get_machine_id();
     let resp = client
@@ -218,30 +305,10 @@ pub async fn validate_license_online(license_key: &str) -> Result<AppTier, Strin
             .error
             .unwrap_or_else(|| "Invalid license key".to_string()));
     }
-    let plan_label = resp
-        .meta
-        .as_ref()
-        .map(|meta| {
-            format!(
-                "{} {}",
-                meta.product_name,
-                meta.variant_name.as_deref().unwrap_or("")
-            )
-        })
-        .unwrap_or_default()
-        .to_lowercase();
-    let tier = if plan_label.contains("pro+") || plan_label.contains("proplus") {
-        "proplus"
-    } else {
-        "pro"
-    };
+    let tier = tier_from_meta(resp.meta.as_ref())?;
     let instance_id = resp.instance.map(|instance| instance.id);
     write_cache_with_instance(license_key, tier, instance_id)?;
-    Ok(if tier == "proplus" {
-        AppTier::ProPlus
-    } else {
-        AppTier::Pro
-    })
+    Ok(app_tier(tier))
 }
 
 pub fn cached_license_can_deactivate() -> bool {
@@ -279,9 +346,12 @@ pub async fn remove_license_online() -> Result<AppTier, String> {
         return Err("Lemon Squeezy is temporarily unavailable. Please try again.".to_string());
     }
 
-    if status.is_client_error() {
+    if status.as_u16() == 404 || status.as_u16() == 422 {
         clear_cache();
         return Ok(AppTier::Free);
+    }
+    if status.is_client_error() {
+        return Err(format!("Could not deactivate the license ({}). Please try again.", status));
     }
 
     let body = response
@@ -308,5 +378,18 @@ pub async fn remove_license_online() -> Result<AppTier, String> {
             .as_str()
             .unwrap_or("Could not deactivate this license. Please try again.")
             .to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_legacy_plan_labels_without_guessing_unknown_plans() {
+        let pro_plus = LSMeta { product_name: "Duskry".into(), variant_name: Some("Pro+ Yearly".into()), variant_id: None };
+        let unknown = LSMeta { product_name: "Duskry".into(), variant_name: Some("Starter".into()), variant_id: None };
+        assert_eq!(tier_from_meta(Some(&pro_plus)).unwrap(), "proplus");
+        assert!(tier_from_meta(Some(&unknown)).is_err());
     }
 }

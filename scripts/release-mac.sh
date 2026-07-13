@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds and publishes all three Mac architecture targets to GitHub.
-# Run this locally on your Mac — uses the Apple Development cert from your Keychain automatically.
+# Requires a Developer ID Application certificate and notarization credentials.
 #
 # Resulting GitHub release assets:
 #   Duskry_arm64.dmg      — Apple Silicon
@@ -34,12 +34,52 @@ TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
 
 node scripts/sync-tauri-config.mjs
+node scripts/validate-config.mjs --release-mac
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Error: the release worktree is not clean. Commit the complete release changes before publishing."
+  git status --short
+  exit 1
+fi
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+  echo "Error: tag ${TAG} already exists. Bump the package version before releasing."
+  exit 1
+fi
+
+IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+  IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -1)
+fi
+if [[ "$IDENTITY" != Developer\ ID\ Application:* ]]; then
+  echo "Error: install a Developer ID Application certificate or set APPLE_SIGNING_IDENTITY."
+  exit 1
+fi
+if ! security find-identity -v -p codesigning | grep -Fq "$IDENTITY"; then
+  echo "Error: the configured Developer ID identity is not available in this keychain."
+  exit 1
+fi
+export APPLE_SIGNING_IDENTITY="$IDENTITY"
+echo "Using signing identity: $APPLE_SIGNING_IDENTITY"
+
+validate_bundle() {
+  local target="$1"
+  local app
+  local dmg
+  app=$(find "src-tauri/target/${target}/release/bundle/macos" -name "*.app" | head -1)
+  dmg=$(find "src-tauri/target/${target}/release/bundle/dmg" -name "*.dmg" | head -1)
+  codesign --verify --deep --strict --verbose=2 "$app"
+  xcrun stapler validate "$app"
+  xcrun stapler validate "$dmg"
+  spctl --assess --type execute --verbose=2 "$app"
+  spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+}
 
 echo "▶ Building Duskry ${TAG} for macOS"
 
 # ── arm64 ──────────────────────────────────────────────────────────────────
 echo "▶ Building arm64"
 npm run tauri build -- --target aarch64-apple-darwin
+validate_bundle aarch64-apple-darwin
 DMG=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
 cp "$DMG" "${TMP}/Duskry_arm64.dmg"
 echo "  arm64 DMG: ${DMG}"
@@ -47,6 +87,7 @@ echo "  arm64 DMG: ${DMG}"
 # ── x64 ────────────────────────────────────────────────────────────────────
 echo "▶ Building x64"
 npm run tauri build -- --target x86_64-apple-darwin
+validate_bundle x86_64-apple-darwin
 DMG=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
 cp "$DMG" "${TMP}/Duskry_x64.dmg"
 echo "  x64 DMG: ${DMG}"
@@ -54,6 +95,7 @@ echo "  x64 DMG: ${DMG}"
 # ── universal ──────────────────────────────────────────────────────────────
 echo "▶ Building universal"
 npm run tauri build -- --target universal-apple-darwin
+validate_bundle universal-apple-darwin
 DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
 cp "$DMG" "${TMP}/Duskry_universal.dmg"
 echo "  universal DMG: ${DMG}"
@@ -104,8 +146,7 @@ gh release create "${TAG}" \
 
 See the assets below to download and install Duskry.
 
-**macOS**: Download the \`.dmg\` file for your chip
-> If macOS shows a security warning, go to **System Settings → Privacy & Security → Open Anyway**
+**macOS**: Download the signed and notarized \`.dmg\` file for your chip.
 
 **Windows**: Download the \`.msi\` or \`.exe\` installer (built by CI)"
 

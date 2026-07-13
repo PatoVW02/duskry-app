@@ -1,6 +1,25 @@
 {
   "versions": [
     {
+      "version": "1.0.7",
+      "title": "Reliable Subscriptions and Cleaner Activity",
+      "summary": "Duskry now keeps paid subscriptions refreshed and makes busy days easier to understand.",
+      "items": [
+        {
+          "icon": "CheckSquare",
+          "text": "Paid licenses now refresh automatically instead of expiring locally after seven days."
+        },
+        {
+          "icon": "MousePointerClick",
+          "text": "Short application switches are grouped into a compact timeline summary."
+        },
+        {
+          "icon": "FolderOpen",
+          "text": "The Activity page now opens in a minimal Summary view with Details available when needed."
+        }
+      ]
+    },
+    {
       "version": "1.0.6",
       "title": "Activity Management Improvements",
       "summary": "Duskry now makes it much easier to organize, bulk-manage, and review your tracked activities.",
