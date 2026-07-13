@@ -45,6 +45,9 @@ if (process.argv.includes('--release-mac')) {
   const appleIdKeys = ['APPLE_ID', 'APPLE_PASSWORD', 'APPLE_TEAM_ID'];
   const apiCredentials = apiKeys.every((key) => env[key]);
   const appleIdCredentials = appleIdKeys.every((key) => env[key]);
+  if (appleIdCredentials && !/^[A-Za-z0-9]{4}(?:-[A-Za-z0-9]{4}){3}$/.test(env.APPLE_PASSWORD)) {
+    errors.push('APPLE_PASSWORD must be an Apple app-specific password in xxxx-xxxx-xxxx-xxxx format');
+  }
   if (!apiCredentials && !appleIdCredentials) {
     const selectedKeys = appleIdKeys.some((key) => env[key]) ? appleIdKeys : apiKeys.some((key) => env[key]) ? apiKeys : null;
     if (selectedKeys) {

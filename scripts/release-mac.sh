@@ -61,6 +61,12 @@ fi
 export APPLE_SIGNING_IDENTITY="$IDENTITY"
 echo "Using signing identity: $APPLE_SIGNING_IDENTITY"
 
+CERT_TEAM_ID=$(printf '%s' "$APPLE_SIGNING_IDENTITY" | sed -n 's/.*(\([A-Z0-9]\{10\}\))$/\1/p')
+if [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "$CERT_TEAM_ID" ] && [ "$APPLE_TEAM_ID" != "$CERT_TEAM_ID" ]; then
+  echo "Error: APPLE_TEAM_ID (${APPLE_TEAM_ID}) does not match the Developer ID certificate team (${CERT_TEAM_ID})."
+  exit 1
+fi
+
 validate_bundle() {
   local target="$1"
   local app
