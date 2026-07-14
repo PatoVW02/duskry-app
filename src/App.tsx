@@ -38,6 +38,7 @@ import { useActivityStore } from './stores/useActivityStore';
 import { usePricesStore } from './stores/usePricesStore';
 import { billingPlansEnabled } from './lib/featureFlags';
 import { historyLimitDays } from './lib/historyAccess';
+import type { ReviewFilter } from './lib/reviewActivity';
 import { resolveAppStartupState } from './lib/startupState';
 
 type Page = 'today' | 'review' | 'projects' | 'rules' | 'reports' | 'settings';
@@ -54,6 +55,10 @@ const PAGE_TITLES: Record<Page, string> = {
 
 function App() {
   const [page, setPage] = useState<Page>('today');
+  const [reviewIntent, setReviewIntent] = useState<{ filter: ReviewFilter; key: number }>({
+    filter: 'all',
+    key: 0,
+  });
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
   const [obStep, setObStep] = useState<OnboardingStep>(0);
   const [startupUpdateToast, setStartupUpdateToast] = useState<null | { kind: 'available' | 'downloaded'; version: string }>(null);
@@ -116,6 +121,19 @@ function App() {
   const openPermissionSettings = () => {
     setSettingsTab('permissions');
     setPage('settings');
+  };
+
+  const openReview = (filter: ReviewFilter) => {
+    setReviewIntent((current) => ({ filter, key: current.key + 1 }));
+    setPage('review');
+  };
+
+  const navigateToPage = (nextPage: Page) => {
+    if (nextPage === 'review') {
+      openReview('all');
+      return;
+    }
+    setPage(nextPage);
   };
 
   useEffect(() => {
@@ -237,7 +255,7 @@ function App() {
       <WhatsNewModal enabled={onboardingComplete === true} />
       <SmartRuleNotice onReview={() => setPage('rules')} />
       <div className="app-content">
-        <Sidebar activePage={page} onNavigate={setPage} />
+        <Sidebar activePage={page} onNavigate={navigateToPage} />
         <div className={`main-area ${scenePreviewMode ? 'main-area--scene-preview' : ''}`}>
           {startupUpdateToast && (
             <StartupUpdateToast
@@ -274,7 +292,7 @@ function App() {
             </div>
           ) : (
             page === 'today' ? (
-              <Today onReview={() => setPage('review')} onOpenPermissions={openPermissionSettings} />
+              <Today onReview={openReview} onOpenPermissions={openPermissionSettings} />
             ) : (
             <>
               <TopBar
@@ -290,7 +308,13 @@ function App() {
                 } : undefined}
               />
               <div className={`page-content ${page === 'review' ? 'page-content--activity' : ''}`}>
-                {page === 'review'    && <ActivityPage onUpgrade={openBillingSettings} />}
+                {page === 'review'    && (
+                  <ActivityPage
+                    key={reviewIntent.key}
+                    onUpgrade={openBillingSettings}
+                    initialFilter={reviewIntent.filter}
+                  />
+                )}
                 {page === 'projects'  && <Projects onUpgrade={openBillingSettings} />}
                 {page === 'rules'     && <Rules onUpgrade={openBillingSettings} onOpenProjects={() => setPage('projects')} />}
                 {page === 'reports'   && <Reports onUpgrade={openBillingSettings} />}

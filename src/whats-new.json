@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.1.3",
+      "title": "A Clearer Way to Review",
+      "summary": "Reviewing a busy day is now faster, easier to understand, and less disruptive while new activity arrives.",
+      "items": [
+        {
+          "icon": "Clock3",
+          "text": "A new daily overview explains what needs attention and shows tracked time, work blocks, and assignment progress."
+        },
+        {
+          "icon": "Eye",
+          "text": "Search and focused filters help you find uncertain, unassigned, or already organized activity without scanning the whole day."
+        },
+        {
+          "icon": "FolderOpen",
+          "text": "Expanded groups stay open when activity refreshes, so you keep your place as the day updates."
+        },
+        {
+          "icon": "CheckSquare",
+          "text": "Selection, editing, project labels, and keyboard navigation are clearer and easier to use."
+        }
+      ]
+    },
+    {
       "version": "1.1.2",
       "title": "Updates You Can Trust",
       "summary": "Duskry is now more dependable when updating, verifying subscriptions, tracking activity, and handling plan changes.",

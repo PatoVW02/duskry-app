@@ -43,6 +43,7 @@ describe('useActivityStore date requests', () => {
       activities: [],
       loading: false,
       error: null,
+      loadedDateKey: null,
       viewDate: new Date(2026, 6, 14),
     });
   });
@@ -66,6 +67,7 @@ describe('useActivityStore date requests', () => {
       activities: [expect.objectContaining({ id: 2, app_name: 'Newest' })],
       loading: false,
       error: null,
+      loadedDateKey: new Date(2026, 6, 14).setHours(0, 0, 0, 0),
     });
   });
 
@@ -88,6 +90,33 @@ describe('useActivityStore date requests', () => {
       activities: [expect.objectContaining({ id: 3, app_name: 'Current' })],
       loading: false,
       error: null,
+      loadedDateKey: new Date(2026, 6, 14).setHours(0, 0, 0, 0),
+    });
+  });
+
+  it('keeps the previous date key while a different day is loading', async () => {
+    const pending = deferred<Activity[]>();
+    invokeMock.mockReturnValueOnce(pending.promise);
+    const previousDateKey = new Date(2026, 6, 13).setHours(0, 0, 0, 0);
+    useActivityStore.setState({
+      activities: [activity(4, 'Previous')],
+      loadedDateKey: previousDateKey,
+    });
+
+    const request = useActivityStore.getState().fetchForDate(new Date(2026, 6, 14));
+
+    expect(useActivityStore.getState()).toMatchObject({
+      loading: true,
+      loadedDateKey: previousDateKey,
+    });
+
+    pending.resolve([activity(5, 'Current')]);
+    await request;
+
+    expect(useActivityStore.getState()).toMatchObject({
+      loading: false,
+      loadedDateKey: new Date(2026, 6, 14).setHours(0, 0, 0, 0),
+      activities: [expect.objectContaining({ id: 5 })],
     });
   });
 });

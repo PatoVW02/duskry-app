@@ -28,6 +28,7 @@ import {
 } from '../lib/activityBursts';
 import { lockedFreeProjectIds } from '../lib/projectAccess';
 import { targetableProjects } from '../lib/projectTargets';
+import type { ReviewFilter } from '../lib/reviewActivity';
 import { errorMessage, formatDuration } from '../lib/utils';
 import { useActivityStore } from '../stores/useActivityStore';
 import { isPro, useLicenseStore } from '../stores/useLicenseStore';
@@ -35,7 +36,7 @@ import { useProjectStore, type Project } from '../stores/useProjectStore';
 import './Today.css';
 
 interface TodayProps {
-  onReview: () => void;
+  onReview: (filter: ReviewFilter) => void;
   onOpenPermissions: () => void;
 }
 
@@ -438,10 +439,10 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
         <div className="today-stats" aria-label="Today summary">
           <div><small>Tracked</small><strong>{formatDuration(trackedSeconds)}</strong></div>
           <div><small>Focused blocks</small><strong>{countFocusedBlocks(bursts)}</strong></div>
-          <button type="button" onClick={onReview}><small>Needs attention</small><strong>{attention.length}</strong></button>
+          <button type="button" onClick={() => onReview('needs-review')}><small>Needs attention</small><strong>{attention.length}</strong></button>
         </div>
         <div className="today-overview-header__actions">
-          <button type="button" className="today-button today-button--primary" onClick={onReview}><ListChecks size={14} /> Review activity <ChevronRight size={13} /></button>
+          <button type="button" className="today-button today-button--primary" onClick={() => onReview('all')}><ListChecks size={14} /> Review activity <ChevronRight size={13} /></button>
           <button type="button" className="today-button today-button--quiet" onClick={() => setShowLogTime(true)}><Plus size={14} /> Log time</button>
         </div>
       </section>
@@ -497,7 +498,7 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
             <>
               <div className="attention-panel__intro">
                 <p>Review uncertain groups to keep reports accurate.</p>
-                <button type="button" className="today-button today-button--primary" onClick={onReview}>Review all ({attention.length}) <ChevronRight size={13} /></button>
+                <button type="button" className="today-button today-button--primary" onClick={() => onReview('needs-review')}>Review all ({attention.length}) <ChevronRight size={13} /></button>
               </div>
               <div className="attention-panel__list">
                 {attention.slice(0, 2).map((burst) => (

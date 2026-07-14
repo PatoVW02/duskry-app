@@ -43,6 +43,7 @@ interface ActivityStore {
   ruleNotices: RuleSuggestion[];
   loading: boolean;
   error: string | null;
+  loadedDateKey: number | null;
   viewDate: Date;
   fetchToday: () => Promise<void>;
   fetchForDate: (date: Date) => Promise<void>;
@@ -95,17 +96,19 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
   ruleNotices: [],
   loading: false,
   error: null,
+  loadedDateKey: null,
   viewDate: new Date(),
 
   fetchForDate: async (date: Date) => {
     const requestId = ++latestActivityRequestId;
+    const dateKey = startOfDay(date).getTime();
     set({ loading: true, error: null });
     try {
       const fromTs = Math.floor(startOfDay(date).getTime() / 1000);
       const toTs   = Math.floor(endOfDay(date).getTime() / 1000);
       const data = await invoke<Activity[]>('get_activities_for_date', { fromTs, toTs });
       if (requestId !== latestActivityRequestId) return;
-      set({ activities: data, loading: false, error: null });
+      set({ activities: data, loading: false, error: null, loadedDateKey: dateKey });
     } catch (error) {
       if (requestId !== latestActivityRequestId) return;
       set({

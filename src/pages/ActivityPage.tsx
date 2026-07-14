@@ -1,15 +1,22 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { isToday, startOfDay, format, fromUnixTime } from 'date-fns';
 import { createPortal } from 'react-dom';
-import { CalendarDays, ChevronRight, ChevronDown, Check, Globe, Folder, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarDays, ChevronRight, ChevronDown, Check, Globe, Folder, Pencil, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { errorMessage, formatDuration } from '../lib/utils';
 import { dragState } from '../lib/dragState';
 import { normalizeTimelineActivities } from '../lib/activityPresentation';
+import { groupActivitiesIntoBursts } from '../lib/activityBursts';
 import { lockedFreeProjectIds } from '../lib/projectAccess';
+import {
+  filterReviewActivities,
+  type ReviewAssignmentSummary,
+  type ReviewFilter,
+} from '../lib/reviewActivity';
 import { Select } from '../components/ui/Select';
+import './Review.css';
 
 // ── Tree types ─────────────────────────────────────────────────────────────
 
@@ -64,10 +71,10 @@ function fullActivityLabel(activity: Activity): string {
   return activity.window_title?.trim() || 'Untitled';
 }
 
-function buildTree(activities: Activity[]): AppGroup[] {
+function buildTree(activities: Activity[], includeBriefActivity = false): AppGroup[] {
   const byApp = new Map<string, Activity[]>();
   for (const a of activities) {
-    if (!a.duration_s || a.duration_s < 5) continue;
+    if (!a.duration_s || (!includeBriefActivity && a.duration_s < 5)) continue;
     const list = byApp.get(a.app_name) ?? [];
     list.push(a);
     byApp.set(a.app_name, list);
@@ -179,6 +186,36 @@ function getSelectionState(activityIds: number[], selectedIds: Set<number>): Sel
   if (matches === 0) return 'none';
   if (matches === activityIds.length) return 'all';
   return 'partial';
+}
+
+function countDistinctApps(
+  activities: readonly Activity[],
+  includeBriefActivity = false,
+): number {
+  return new Set(
+    activities
+      .filter((activity) => Boolean(activity.duration_s) && (includeBriefActivity || (activity.duration_s ?? 0) >= 5))
+      .map((activity) => activity.app_name),
+  ).size;
+}
+
+function summarizeIndexedAssignment(
+  activityIds: readonly number[],
+  projectIdByActivityId: ReadonlyMap<number, number | null>,
+): ReviewAssignmentSummary {
+  const projectIds = new Set<number | null>();
+  for (const activityId of activityIds) {
+    if (projectIdByActivityId.has(activityId)) {
+      projectIds.add(projectIdByActivityId.get(activityId) ?? null);
+    }
+  }
+  if (projectIds.size === 0 || (projectIds.size === 1 && projectIds.has(null))) {
+    return { status: 'unassigned', projectId: null };
+  }
+  if (projectIds.size === 1) {
+    return { status: 'assigned', projectId: [...projectIds][0] as number };
+  }
+  return { status: 'mixed', projectId: null };
 }
 
 // ── Timeline constants ─────────────────────────────────────────────────────
@@ -303,15 +340,43 @@ function HoverText({
 
 // ── Edit modal ─────────────────────────────────────────────────────────────
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.42)' }}>{children}</span>;
+function FieldLabel({ htmlFor, children }: { htmlFor: string; children: React.ReactNode }) {
+  return <label htmlFor={htmlFor} style={{ fontSize: 11, color: 'rgba(255,255,255,0.42)' }}>{children}</label>;
 }
 
 function EditModal({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
+
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    return () => {
+      window.removeEventListener('keydown', handler);
+      previouslyFocusedRef.current?.focus();
+    };
   }, [onClose]);
 
   return createPortal(
@@ -325,7 +390,12 @@ function EditModal({ onClose, children }: { onClose: () => void; children: React
       }}
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div style={{
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-edit-title"
+        style={{
         width: 400, display: 'flex', flexDirection: 'column',
         background: 'rgba(8,22,17,0.82)',
         backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)',
@@ -333,10 +403,11 @@ function EditModal({ onClose, children }: { onClose: () => void; children: React
         borderRadius: 18,
         boxShadow: '0 32px 72px rgba(0,0,0,0.55), inset 0 0.5px 0 rgba(255,255,255,0.09)',
         overflow: 'hidden',
-      }}>
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 0' }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'rgba(255,255,255,0.88)' }}>Edit activity</span>
-          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: '0.5px solid rgba(255,255,255,0.10)', borderRadius: 8, width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.45)', cursor: 'pointer' }}>
+          <span id="review-edit-title" style={{ fontSize: 14, fontWeight: 600, color: 'rgba(255,255,255,0.88)' }}>Edit activity</span>
+          <button type="button" aria-label="Close activity editor" onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: '0.5px solid rgba(255,255,255,0.10)', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.45)', cursor: 'pointer' }}>
             <X size={13} />
           </button>
         </div>
@@ -351,9 +422,11 @@ function EditModal({ onClose, children }: { onClose: () => void; children: React
 
 function SelectionToggle({
   state,
+  label,
   onToggle,
 }: {
   state: SelectionState;
+  label: string;
   onToggle: () => void;
 }) {
   return (
@@ -363,8 +436,8 @@ function SelectionToggle({
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
       style={{
-        width: 20,
-        height: 20,
+        width: 24,
+        height: 24,
         borderRadius: 7,
         border: `0.5px solid ${state === 'none' ? 'rgba(255,255,255,0.16)' : 'rgba(45,212,191,0.42)'}`,
         background: state === 'none' ? 'rgba(255,255,255,0.04)' : 'rgba(45,212,191,0.14)',
@@ -377,7 +450,9 @@ function SelectionToggle({
         marginLeft: 8,
         marginRight: 10,
       }}
-      title={state === 'all' ? 'Deselect' : 'Select'}
+      aria-label={`${state === 'all' ? 'Deselect' : 'Select'} ${label}`}
+      aria-pressed={state === 'partial' ? 'mixed' : state === 'all'}
+      title={`${state === 'all' ? 'Deselect' : 'Select'} ${label}`}
     >
       {state === 'all' ? (
         <Check size={11} strokeWidth={2.4} />
@@ -391,11 +466,12 @@ function SelectionToggle({
 // ── Title group row (with hover edit/delete) ───────────────────────────────
 
 function TitleGroupRow({
-  tg, tooltipText, tpro, paddingLeft, pointerDragProps, expanded, selectionState, onToggleSelect, onToggle, onEdit, onDelete, onHover, onHoverEnd,
+  tg, tooltipText, tpro, assignmentStatus, paddingLeft, pointerDragProps, expanded, selectionState, onToggleSelect, onToggle, onEdit, onDelete, onHover, onHoverEnd,
 }: {
   tg: TitleGroup;
   tooltipText: string;
   tpro: Project | null;
+  assignmentStatus: 'unassigned' | 'mixed' | null;
   paddingLeft: number;
   pointerDragProps: (ids: number[], options?: { onPress?: () => void }) => object;
   expanded: boolean;
@@ -410,14 +486,17 @@ function TitleGroupRow({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isExpandable = tg.activityIds.length > 1;
   const canEdit = Boolean(onEdit) && !isExpandable;
+  const rowAction = isExpandable ? onToggle : onEdit;
   const rowProps = pointerDragProps(tg.activityIds, {
-    onPress: isExpandable ? onToggle : onEdit,
+    onPress: rowAction,
   }) as React.HTMLAttributes<HTMLDivElement>;
 
   return (
     <div
       {...rowProps}
       className="activity-tree-row"
+      role="group"
+      aria-label={`${tooltipText} activity group`}
       onMouseEnter={onHover}
       onMouseLeave={() => { onHoverEnd(); setConfirmDelete(false); }}
       style={{
@@ -428,32 +507,67 @@ function TitleGroupRow({
         ...(tpro ? { borderLeft: `2.5px solid ${tpro.color}77` } : {}),
       }}
     >
-      <SelectionToggle state={selectionState} onToggle={onToggleSelect} />
+      <SelectionToggle state={selectionState} label={tooltipText} onToggle={onToggleSelect} />
       {isExpandable && (
-        <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.24)', display: 'flex', alignItems: 'center', marginRight: 4 }}>
+        <button
+          type="button"
+          data-no-drag="true"
+          className="review-row-disclosure"
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${tooltipText}`}
+          aria-expanded={expanded}
+          onClick={(event) => { event.stopPropagation(); onToggle?.(); }}
+        >
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-        </span>
+        </button>
       )}
-      <span style={{
+      <button
+        type="button"
+        data-no-drag="true"
+        className="review-row-label-button"
+        onClick={(event) => { event.stopPropagation(); rowAction?.(); }}
+        style={{
         fontSize: 12,
         color: tg.title ? 'rgba(255,255,255,0.42)' : 'rgba(255,255,255,0.22)',
         fontStyle: tg.title ? 'normal' : 'italic',
         flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
+        }}
+      >
         <HoverText text={tooltipText} />
-      </span>
+      </button>
       <span style={{
         fontSize: 11, color: 'rgba(255,255,255,0.28)',
-        flexShrink: 0, marginLeft: 'auto', marginRight: tpro ? 6 : 8,
+        flexShrink: 0, marginLeft: 'auto', marginRight: 8,
         fontVariantNumeric: 'tabular-nums',
         minWidth: 48, textAlign: 'right', whiteSpace: 'nowrap',
       }}>
         {formatDuration(tg.total_s)}
       </span>
       {tpro && (
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: tpro.color, flexShrink: 0, marginRight: 8 }} />
+        <span className="review-row-assignment review-row-assignment--compact">
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: tpro.color }} />
+          <span>{tpro.name}</span>
+        </span>
+      )}
+      {assignmentStatus === 'unassigned' && (
+        <span className="review-row-assignment review-row-assignment--compact review-row-assignment--unassigned">Unassigned</span>
+      )}
+      {assignmentStatus === 'mixed' && (
+        <span className="review-row-assignment review-row-assignment--compact review-row-assignment--mixed">Mixed</span>
+      )}
+      {isExpandable && onEdit && (
+        <button
+          type="button"
+          data-no-drag="true"
+          className="review-row-edit-button"
+          aria-label={`Edit all ${tg.activityIds.length} ${tooltipText} activities`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => { event.stopPropagation(); onEdit(); }}
+        >
+          <Pencil size={10} />
+        </button>
       )}
       <ActivityDeleteControl
+        label={tooltipText}
         confirm={confirmDelete}
         onConfirmChange={setConfirmDelete}
         onDelete={onDelete}
@@ -485,6 +599,8 @@ function ActivityLeafRow({
     <div
       {...rowProps}
       className="activity-tree-row"
+      role="group"
+      aria-label={`${fullActivityLabel(activity)} activity`}
       onMouseEnter={onHover}
       onMouseLeave={() => { onHoverEnd(); setConfirmDelete(false); }}
       style={{
@@ -495,21 +611,27 @@ function ActivityLeafRow({
         ...(project ? { borderLeft: `2.5px solid ${project.color}55` } : {}),
       }}
     >
-      <SelectionToggle state={selectionState} onToggle={onToggleSelect} />
-      <span style={{
+      <SelectionToggle state={selectionState} label={fullActivityLabel(activity)} onToggle={onToggleSelect} />
+      <button
+        type="button"
+        data-no-drag="true"
+        className="review-row-label-button"
+        onClick={(event) => { event.stopPropagation(); onEdit(); }}
+        style={{
         fontSize: 11.5,
         color: activity.window_title ? 'rgba(255,255,255,0.50)' : 'rgba(255,255,255,0.26)',
         fontStyle: activity.window_title ? 'normal' : 'italic',
         flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
+        }}
+      >
         <HoverText text={fullActivityLabel(activity)} />
-      </span>
+      </button>
       <span style={{
         fontSize: 11,
         color: 'rgba(255,255,255,0.24)',
         flexShrink: 0,
         marginLeft: 'auto',
-        marginRight: project ? 6 : 8,
+        marginRight: 8,
         fontVariantNumeric: 'tabular-nums',
         minWidth: 44,
         textAlign: 'right',
@@ -529,10 +651,16 @@ function ActivityLeafRow({
       }}>
         {formatDuration(activity.duration_s ?? 0)}
       </span>
-      {project && (
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: project.color, flexShrink: 0, marginRight: 8 }} />
+      {project ? (
+        <span className="review-row-assignment review-row-assignment--compact">
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: project.color }} />
+          <span>{project.name}</span>
+        </span>
+      ) : (
+        <span className="review-row-assignment review-row-assignment--compact review-row-assignment--unassigned">Unassigned</span>
       )}
       <ActivityDeleteControl
+        label={fullActivityLabel(activity)}
         confirm={confirmDelete}
         onConfirmChange={setConfirmDelete}
         onDelete={onDelete}
@@ -542,10 +670,12 @@ function ActivityLeafRow({
 }
 
 function ActivityDeleteControl({
+  label,
   confirm,
   onConfirmChange,
   onDelete,
 }: {
+  label: string;
   confirm: boolean;
   onConfirmChange: (confirm: boolean) => void;
   onDelete: () => void;
@@ -555,6 +685,7 @@ function ActivityDeleteControl({
       <div data-no-drag="true" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto' }}>
         <button
           type="button"
+          aria-label={`Confirm deletion of ${label}`}
           className="delete-confirm-button"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
@@ -569,6 +700,7 @@ function ActivityDeleteControl({
         </button>
         <button
           type="button"
+          aria-label={`Cancel deletion of ${label}`}
           className="cancel-confirm-button"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); onConfirmChange(false); }}
@@ -592,7 +724,8 @@ function ActivityDeleteControl({
       data-no-drag="true"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onConfirmChange(true); }}
-      title="Delete"
+      aria-label={`Delete ${label}`}
+      title={`Delete ${label}`}
       style={{
         background: 'rgba(255,255,255,0.03)',
         border: '0.5px solid rgba(255,255,255,0.08)',
@@ -612,8 +745,17 @@ function ActivityDeleteControl({
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
+export function ActivityPage({
+  onUpgrade,
+  initialFilter = 'all',
+}: {
+  onUpgrade: () => void;
+  initialFilter?: ReviewFilter;
+}) {
   const activities      = useActivityStore((s) => s.activities);
+  const loading         = useActivityStore((s) => s.loading);
+  const loadError       = useActivityStore((s) => s.error);
+  const loadedDateKey   = useActivityStore((s) => s.loadedDateKey);
   const viewDate        = useActivityStore((s) => s.viewDate);
   const fetchForDate    = useActivityStore((s) => s.fetchForDate);
   const assignToProject = useActivityStore((s) => s.assignToProject);
@@ -638,6 +780,8 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [viewMode, setViewMode] = useState<'summary' | 'details'>('summary');
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>(initialFilter);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // ── edit state ────────────────────────────────────────────────────────
   const [editingTarget, setEditingTarget] = useState<EditTarget | null>(null);
@@ -648,6 +792,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [editEnd,    setEditEnd]    = useState('');
   const [saving,     setSaving]     = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const closeEdit = useCallback(() => setEditingTarget(null), []);
 
   const openEdit = (a: Activity, activityIds: number[] = [a.id]) => {
     setEditError(null);
@@ -776,40 +921,66 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [tipPos,  setTipPos]  = useState<TPos>({ x: 0, y: 0 });
   const [nowY,    setNowY]    = useState<number | null>(null);
 
-  const dayStart = startOfDay(viewDate).getTime() / 1000;
-  const tsToY    = (ts: number) => ((ts - dayStart) / 3600) * HOUR_HEIGHT;
+  const viewDateKey = startOfDay(viewDate).getTime();
+  const hasCurrentDateData = loadedDateKey === viewDateKey;
+  const dayStart = viewDateKey / 1000;
+  const viewingToday = isToday(viewDate);
+  const tsToY = useCallback(
+    (ts: number) => ((ts - dayStart) / 3600) * HOUR_HEIGHT,
+    [dayStart],
+  );
   const hours    = Array.from({ length: 24 }, (_, i) => i);
 
   useEffect(() => {
-    fetchForDate(viewDate);
-    if (isToday(viewDate)) {
-      const id = setInterval(() => fetchForDate(viewDate), 10_000);
+    const snapshot = useActivityStore.getState();
+    const requestedDate = new Date(viewDateKey);
+    if (!snapshot.loading && snapshot.loadedDateKey !== viewDateKey) {
+      void fetchForDate(requestedDate);
+    }
+    if (viewingToday) {
+      const id = setInterval(() => void fetchForDate(requestedDate), 10_000);
       return () => clearInterval(id);
     }
-  }, [viewDate]);
+  }, [fetchForDate, viewDateKey, viewingToday]);
+
+  useEffect(() => {
+    setReviewFilter(initialFilter);
+  }, [initialFilter]);
+
+  useEffect(() => {
+    setExpandedApps(new Set());
+    setExpandedCtx(new Set());
+    setExpandedTitles(new Set());
+    setHoveredActivityIds(null);
+    setDeleteConfirmKey(null);
+    setSelectedActivityIds(new Set());
+    setBulkAssignProjectId('');
+    setBulkDeleteConfirm(false);
+    setEditingTarget(null);
+  }, [viewDateKey]);
 
   // now-line
   useEffect(() => {
-    const update = () => setNowY(isToday(viewDate) ? tsToY(Date.now() / 1000) : null);
+    const update = () => setNowY(viewingToday ? tsToY(Date.now() / 1000) : null);
     update();
     const id = setInterval(update, 60_000);
     return () => clearInterval(id);
-  }, [viewDate]);
+  }, [tsToY, viewingToday]);
 
   // Scroll timeline to current hour on date change
   useEffect(() => {
     if (!scrollRef.current) return;
-    const targetHour = isToday(viewDate) ? Math.max(0, new Date().getHours() - 3) : 8;
+    const targetHour = viewingToday ? Math.max(0, new Date().getHours() - 3) : 8;
     scrollRef.current.scrollTop = targetHour * HOUR_HEIGHT;
-  }, [viewDate]);
+  }, [viewDateKey, viewingToday]);
 
   useEffect(() => {
-    const visibleIds = new Set(activities.map((activity) => activity.id));
+    const visibleIds = new Set((hasCurrentDateData ? activities : []).map((activity) => activity.id));
     setSelectedActivityIds((current) => {
       const next = new Set(Array.from(current).filter((id) => visibleIds.has(id)));
       return next.size === current.size ? current : next;
     });
-  }, [activities]);
+  }, [activities, hasCurrentDateData]);
 
   useEffect(() => {
     const bulkProjectId = Number(bulkAssignProjectId);
@@ -822,7 +993,84 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     setBulkDeleteConfirm(false);
   }, [selectedActivityIds, bulkAssignProjectId, lockedProjectIds]);
 
-  const tree = buildTree(activities);
+  const currentActivities = useMemo(
+    () => hasCurrentDateData ? activities : [],
+    [activities, hasCurrentDateData],
+  );
+  const activityBursts = useMemo(
+    () => groupActivitiesIntoBursts(currentActivities),
+    [currentActivities],
+  );
+  const needsReviewActivityIds = useMemo(
+    () => {
+      const ids = new Set<number>();
+      for (const burst of activityBursts) {
+        if (burst.needsAttention) burst.activityIds.forEach((id) => ids.add(id));
+      }
+      return ids;
+    },
+    [activityBursts],
+  );
+  const filteredActivities = useMemo(
+    () => filterReviewActivities(currentActivities, {
+      filter: reviewFilter,
+      query: searchQuery,
+      projects,
+      needsReviewActivityIds,
+    }),
+    [currentActivities, needsReviewActivityIds, projects, reviewFilter, searchQuery],
+  );
+  const tree = useMemo(
+    () => buildTree(filteredActivities, reviewFilter === 'needs-review'),
+    [filteredActivities, reviewFilter],
+  );
+  const visibleTreeActivityIds = useMemo(
+    () => new Set(tree.flatMap((app) => app.activityIds)),
+    [tree],
+  );
+  const activityById = useMemo(
+    () => new Map(currentActivities.map((activity) => [activity.id, activity] as const)),
+    [currentActivities],
+  );
+  const projectIdByActivityId = useMemo(
+    () => new Map(currentActivities.map((activity) => [activity.id, activity.project_id] as const)),
+    [currentActivities],
+  );
+  const projectById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project] as const)),
+    [projects],
+  );
+  const needsReviewBlockCount = useMemo(
+    () => activityBursts.filter((burst) => burst.needsAttention).length,
+    [activityBursts],
+  );
+  const assignedCount = useMemo(
+    () => currentActivities.filter((activity) => activity.project_id !== null).length,
+    [currentActivities],
+  );
+  const assignmentPercent = currentActivities.length > 0
+    ? Math.round((assignedCount / currentActivities.length) * 100)
+    : 0;
+  const filterAppCounts = useMemo(() => ({
+    all: countDistinctApps(currentActivities),
+    'needs-review': countDistinctApps(
+      currentActivities.filter((activity) => needsReviewActivityIds.has(activity.id)),
+      true,
+    ),
+    unassigned: countDistinctApps(
+      currentActivities.filter((activity) => activity.project_id === null),
+    ),
+    assigned: countDistinctApps(
+      currentActivities.filter((activity) => activity.project_id !== null),
+    ),
+  }), [currentActivities, needsReviewActivityIds]);
+
+  useEffect(() => {
+    setSelectedActivityIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => visibleTreeActivityIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleTreeActivityIds]);
 
   const toggleApp = (name: string) =>
     setExpandedApps((s) => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; });
@@ -849,8 +1097,8 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     setBulkDeleteConfirm(false);
   }, []);
   const selectAllActivities = useCallback(() => {
-    setSelectedActivityIds(new Set(activities.map((activity) => activity.id)));
-  }, [activities]);
+    setSelectedActivityIds(new Set(visibleTreeActivityIds));
+  }, [visibleTreeActivityIds]);
   const resolveDragIds = useCallback((ids: number[]) => {
     const selectedIds = Array.from(selectedActivityIds);
     const hasSelectedInRow = ids.some((id) => selectedActivityIds.has(id));
@@ -1000,95 +1248,170 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     },
   }), [resolveDragIds]);
 
-  const timelineBlocks = normalizeTimelineActivities(activities);
-  const totalSecs = activities.reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
+  const timelineBlocks = normalizeTimelineActivities(filteredActivities);
+  const totalSecs = currentActivities.reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
+  const filteredTotalSecs = filteredActivities.reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
   const showTimeline = isPro(tier);
 
   return (
-    <div style={{ display: 'flex', gap: 14, alignItems: 'stretch', height: '100%', minHeight: 0, overflow: 'hidden' }}>
+    <div className="review-page">
+      <section className="review-overview" aria-labelledby="review-page-title">
+        <div className="review-overview__copy">
+          <span className="review-overview__eyebrow">Organize your time</span>
+          <h1 id="review-page-title">Review your activity</h1>
+          <p>Confirm project assignments, correct uncertain activity, or open details when you need them.</p>
+          {!showTimeline && (
+            <button type="button" className="review-overview__upgrade" onClick={onUpgrade}>
+              <CalendarDays size={13} /> Add the visual day timeline with Pro
+            </button>
+          )}
+        </div>
+        <div className="review-overview__stats" aria-label="Review summary">
+          <div className="review-stat">
+            <span>Tracked</span>
+            <strong>{formatDuration(totalSecs)}</strong>
+          </div>
+          <div className="review-stat">
+            <span>Work blocks</span>
+            <strong>{activityBursts.length}</strong>
+          </div>
+          <div className={`review-stat ${needsReviewBlockCount > 0 ? 'review-stat--attention' : ''}`}>
+            <span>Needs attention</span>
+            <strong>{needsReviewBlockCount}</strong>
+          </div>
+          <div className="review-stat">
+            <span>Assigned</span>
+            <strong>{assignmentPercent}%</strong>
+          </div>
+        </div>
+      </section>
+
+      <div className="review-workspace">
 
       {/* ── Left: activity tree ─────────────────────────────────────────── */}
-      <div style={{ flex: showTimeline ? '1 1 0' : '1', minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
+      <div className="review-activity-column">
         <div
-          className="glass-card"
-          style={{
-            padding: '14px 14px 12px',
-            background: 'rgba(255,255,255,0.035)',
-            border: '0.5px solid rgba(255,255,255,0.08)',
-            minHeight: 160,
-            maxHeight: '100%',
-            minWidth: 0,
-            width: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
+          className="glass-card review-activity-panel"
         >
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 10,
-            padding: '2px 4px 8px',
-            borderBottom: '0.5px solid rgba(255,255,255,0.06)',
-            flexShrink: 0,
-          }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.68)', letterSpacing: '0.03em' }}>
-              Activities
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div role="group" aria-label="Activity detail level" style={{ display: 'flex', padding: 2, borderRadius: 7, background: 'rgba(255,255,255,0.045)' }}>
+          <div className="review-panel-heading">
+            <div>
+              <h2>Activities</h2>
+              <p>Select rows to assign them in bulk. Open an app for websites, windows, and individual records.</p>
+            </div>
+            <div className="review-panel-heading__actions">
+              <div role="group" aria-label="Activity detail level" className="review-view-toggle">
                 {(['summary', 'details'] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
                     aria-pressed={viewMode === mode}
                     onClick={() => setViewMode(mode)}
-                    style={{
-                      border: 0,
-                      borderRadius: 5,
-                      padding: '3px 8px',
-                      background: viewMode === mode ? 'rgba(255,255,255,0.10)' : 'transparent',
-                      color: viewMode === mode ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.36)',
-                      fontSize: 10.5,
-                      textTransform: 'capitalize',
-                      cursor: 'pointer',
-                    }}
                   >
-                    {mode}
+                    {mode === 'summary' ? 'Overview' : 'Details'}
                   </button>
                 ))}
               </div>
-              {activities.length > 0 && selectedActivityIds.size < activities.length && (
+              {visibleTreeActivityIds.size > 0 && selectedActivityIds.size < visibleTreeActivityIds.size && (
                 <button
                   type="button"
+                  className="review-select-all"
+                  aria-label={`Select all ${visibleTreeActivityIds.size} visible activities`}
                   onClick={selectAllActivities}
-                  style={{
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '0.5px solid rgba(255,255,255,0.12)',
-                    borderRadius: 999,
-                    padding: '4px 10px',
-                    color: 'rgba(255,255,255,0.58)',
-                    fontSize: 11,
-                    cursor: 'pointer',
-                  }}
                 >
-                  Select all
+                  Select visible
                 </button>
               )}
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.32)', fontVariantNumeric: 'tabular-nums' }}>
+              <span className="review-app-count">
                 {tree.length} {tree.length === 1 ? 'app' : 'apps'}
               </span>
             </div>
           </div>
 
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2 }}>
-            {tree.length === 0 ? (
-              <div style={{
-                fontSize: 13, color: 'rgba(255,255,255,0.22)',
-                textAlign: 'center', paddingTop: 48,
-              }}>
-                No activity recorded yet
+          <div className="review-toolbar">
+            <div className="review-search">
+              <Search size={14} aria-hidden="true" />
+              <label className="sr-only" htmlFor="review-activity-search">Search activities</label>
+              <input
+                id="review-activity-search"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search apps, titles, websites, files, or projects"
+              />
+              {searchQuery && (
+                <button type="button" aria-label="Clear activity search" onClick={() => setSearchQuery('')}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+            <div className="review-filters" role="group" aria-label="Filter activities by assignment status">
+              {([
+                ['all', 'All', filterAppCounts.all],
+                ['needs-review', 'Needs attention', filterAppCounts['needs-review']],
+                ['unassigned', 'Unassigned', filterAppCounts.unassigned],
+                ['assigned', 'Assigned', filterAppCounts.assigned],
+              ] as const).map(([value, label, count]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={reviewFilter === value}
+                  className={reviewFilter === value ? 'review-filter review-filter--active' : 'review-filter'}
+                  onClick={() => setReviewFilter(value)}
+                >
+                  <span>{label}</span>
+                  <strong>{count}</strong>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {(loading && hasCurrentDateData) && (
+            <div className="review-inline-status" role="status" aria-live="polite">
+              <RefreshCw size={12} className="review-spin" /> Refreshing activity…
+            </div>
+          )}
+          {(loadError && hasCurrentDateData) && (
+            <div className="review-inline-status review-inline-status--error" role="alert">
+              <AlertTriangle size={13} />
+              <span>{loadError}</span>
+              <button type="button" onClick={() => void fetchForDate(viewDate)}>Retry</button>
+            </div>
+          )}
+
+          <div className="review-activity-scroll">
+            {loading && !hasCurrentDateData ? (
+              <div className="review-state" role="status" aria-live="polite">
+                <RefreshCw size={22} className="review-spin" />
+                <strong>Loading this day’s activity…</strong>
+                <span>Your previous day stays hidden until this date is ready.</span>
+              </div>
+            ) : loadError && !hasCurrentDateData ? (
+              <div className="review-state review-state--error" role="alert">
+                <AlertTriangle size={24} />
+                <strong>Activity could not be loaded</strong>
+                <span>{loadError}</span>
+                <button type="button" className="btn-secondary" onClick={() => void fetchForDate(viewDate)}>Try again</button>
+              </div>
+            ) : currentActivities.length === 0 ? (
+              <div className="review-state">
+                <CalendarDays size={24} />
+                <strong>Nothing to review for this day</strong>
+                <span>Tracked applications will appear here once activity is recorded.</span>
+              </div>
+            ) : tree.length === 0 ? (
+              <div className="review-state">
+                <Check size={24} />
+                <strong>{reviewFilter === 'needs-review' && !searchQuery ? 'You’re all caught up' : 'No matching activity'}</strong>
+                <span>{reviewFilter === 'needs-review' && !searchQuery
+                  ? 'Every recorded block has a confident project assignment.'
+                  : 'Try another search or assignment filter.'}</span>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => { setReviewFilter('all'); setSearchQuery(''); }}
+                >
+                  Clear filters
+                </button>
               </div>
             ) : (
               tree.map((app) => {
@@ -1100,12 +1423,25 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
 
                 {/* App row */}
                 {(() => {
-                  const upid = unanimousProjectId(app.activityIds, activities);
-                  const upro = upid ? projects.find((p) => p.id === upid) : null;
+                  const assignment = summarizeIndexedAssignment(app.activityIds, projectIdByActivityId);
+                  const upro = assignment.status === 'assigned'
+                    ? projectById.get(assignment.projectId) ?? null
+                    : null;
+                  const appNeedsReview = app.activityIds.some((id) => needsReviewActivityIds.has(id));
+                  const handleAppPress = () => {
+                    if (viewMode === 'details') {
+                      toggleApp(app.appName);
+                      return;
+                    }
+                    setViewMode('details');
+                    setExpandedApps((current) => new Set(current).add(app.appName));
+                  };
                   return (
                     <div
-                      {...pointerDragProps(app.activityIds, { onPress: viewMode === 'details' ? () => toggleApp(app.appName) : undefined })}
-                      className="activity-tree-row"
+                      {...pointerDragProps(app.activityIds, { onPress: handleAppPress })}
+                      className="activity-tree-row review-app-row"
+                      role="group"
+                      aria-label={`${displayAppName(app.appName)} activities`}
                       onMouseEnter={() => highlightActivityIds(app.activityIds)}
                       onMouseLeave={() => { clearActivityHighlight(); setDeleteConfirmKey(null); }}
                       style={{
@@ -1117,6 +1453,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                     >
                       <SelectionToggle
                         state={getSelectionState(app.activityIds, selectedActivityIds)}
+                        label={`${displayAppName(app.appName)} activities`}
                         onToggle={() => toggleSelectedActivityIds(app.activityIds)}
                       />
                       <span style={{
@@ -1126,9 +1463,16 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                       }}>
                         {formatDuration(app.total_s)}
                       </span>
-                      <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.30)', display: 'flex', alignItems: 'center' }}>
-                        {viewMode === 'details' && (appOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />)}
-                      </span>
+                      <button
+                        type="button"
+                        data-no-drag="true"
+                        className="review-row-disclosure"
+                        aria-label={`${viewMode === 'details' && appOpen ? 'Collapse' : 'Open'} ${displayAppName(app.appName)} activity details`}
+                        aria-expanded={viewMode === 'details' ? appOpen : false}
+                        onClick={(event) => { event.stopPropagation(); handleAppPress(); }}
+                      >
+                        {viewMode === 'details' && appOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                      </button>
                       <AppIcon name={app.appName} />
                       <span style={{
                         marginLeft: 7, fontSize: 13, fontWeight: 500,
@@ -1137,18 +1481,28 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                       }}>
                         <HoverText text={displayAppName(app.appName)} />
                       </span>
+                      <span className="review-row-count">
+                        {app.activityIds.length} {app.activityIds.length === 1 ? 'record' : 'records'}
+                      </span>
+                      {appNeedsReview && (
+                        <span className="review-row-status review-row-status--attention">Needs review</span>
+                      )}
                       {upro && (
-                        <span style={{
-                          display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto',
-                          marginRight: 8,
-                        }}>
+                        <span className="review-row-assignment">
                           <span style={{ width: 6, height: 6, borderRadius: '50%', background: upro.color }} />
-                          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.30)', maxWidth: 72, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span>
                             {upro.name}
                           </span>
                         </span>
                       )}
+                      {assignment.status === 'unassigned' && (
+                        <span className="review-row-assignment review-row-assignment--unassigned">Unassigned</span>
+                      )}
+                      {assignment.status === 'mixed' && (
+                        <span className="review-row-assignment review-row-assignment--mixed">Mixed projects</span>
+                      )}
                       <ActivityDeleteControl
+                        label={`${displayAppName(app.appName)} activities`}
                         confirm={deleteConfirmKey === `app:${app.appName}`}
                         onConfirmChange={(confirm) => setDeleteConfirmKey(confirm ? `app:${app.appName}` : null)}
                         onDelete={() => void handleDeleteActivities(app.activityIds)}
@@ -1161,6 +1515,10 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                   const ctxKey  = `${app.appName}::${ctx.context}`;
                   const ctxOpen = expandedCtx.has(ctxKey);
                   const showCtxRow = hasContext && ctx.context !== '';
+                  const contextAssignment = summarizeIndexedAssignment(ctx.activityIds, projectIdByActivityId);
+                  const contextProject = contextAssignment.status === 'assigned'
+                    ? projectById.get(contextAssignment.projectId) ?? null
+                    : null;
 
                   return (
                     <div key={ctxKey}>
@@ -1168,6 +1526,8 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                         <div
                           {...pointerDragProps(ctx.activityIds, { onPress: () => toggleCtx(ctxKey) })}
                           className="activity-tree-row"
+                          role="group"
+                          aria-label={`${ctx.context} activity group`}
                           onMouseEnter={() => highlightActivityIds(ctx.activityIds)}
                           onMouseLeave={() => { clearActivityHighlight(); setDeleteConfirmKey(null); }}
                           style={{
@@ -1179,11 +1539,19 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                         >
                           <SelectionToggle
                             state={getSelectionState(ctx.activityIds, selectedActivityIds)}
+                            label={`${ctx.context} activities`}
                             onToggle={() => toggleSelectedActivityIds(ctx.activityIds)}
                           />
-                          <span style={{ width: 14, flexShrink: 0, color: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            data-no-drag="true"
+                            className="review-row-disclosure"
+                            aria-label={`${ctxOpen ? 'Collapse' : 'Expand'} ${ctx.context}`}
+                            aria-expanded={ctxOpen}
+                            onClick={(event) => { event.stopPropagation(); toggleCtx(ctxKey); }}
+                          >
                             {ctxOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                          </span>
+                          </button>
                           <span style={{ color: 'rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
                             {ctx.contextType === 'domain' ? <Globe size={11} /> : <Folder size={11} />}
                           </span>
@@ -1202,7 +1570,20 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                           }}>
                             {formatDuration(ctx.total_s)}
                           </span>
+                          {contextProject && (
+                            <span className="review-row-assignment review-row-assignment--compact">
+                              <span style={{ width: 5, height: 5, borderRadius: '50%', background: contextProject.color }} />
+                              <span>{contextProject.name}</span>
+                            </span>
+                          )}
+                          {contextAssignment.status === 'unassigned' && (
+                            <span className="review-row-assignment review-row-assignment--compact review-row-assignment--unassigned">Unassigned</span>
+                          )}
+                          {contextAssignment.status === 'mixed' && (
+                            <span className="review-row-assignment review-row-assignment--compact review-row-assignment--mixed">Mixed</span>
+                          )}
                           <ActivityDeleteControl
+                            label={`${ctx.context} activities`}
                             confirm={deleteConfirmKey === `ctx:${ctxKey}`}
                             onConfirmChange={(confirm) => setDeleteConfirmKey(confirm ? `ctx:${ctxKey}` : null)}
                             onDelete={() => void handleDeleteActivities(ctx.activityIds)}
@@ -1212,11 +1593,13 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                       {(!showCtxRow || ctxOpen) && ctx.titles.map((tg) => {
                         const titleKey = `${app.appName}::${ctx.context}::${tg.title || '__untitled__'}`;
                         const titleOpen = expandedTitles.has(titleKey);
-                        const tpid = unanimousProjectId(tg.activityIds, activities);
-                        const tpro = tpid ? projects.find((p) => p.id === tpid) : null;
-                        const editableActivity = activities.find((a) => a.id === tg.activityIds[0]) ?? null;
+                        const titleAssignment = summarizeIndexedAssignment(tg.activityIds, projectIdByActivityId);
+                        const tpro = titleAssignment.status === 'assigned'
+                          ? projectById.get(titleAssignment.projectId) ?? null
+                          : null;
+                        const editableActivity = activityById.get(tg.activityIds[0]) ?? null;
                         const titleActivities = tg.activityIds
-                          .map((id) => activities.find((a) => a.id === id) ?? null)
+                          .map((id) => activityById.get(id) ?? null)
                           .filter((a): a is Activity => a !== null)
                           .sort((a, b) => a.started_at - b.started_at);
                         return (
@@ -1229,6 +1612,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                                   : (tg.title || 'Untitled')
                               }
                               tpro={tpro ?? null}
+                              assignmentStatus={titleAssignment.status === 'assigned' ? null : titleAssignment.status}
                               paddingLeft={showCtxRow ? 86 : 62}
                               pointerDragProps={pointerDragProps}
                               expanded={titleOpen}
@@ -1241,7 +1625,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                               onHoverEnd={clearActivityHighlight}
                             />
                             {titleOpen && titleActivities.map((activity) => {
-                              const apro = activity.project_id ? projects.find((p) => p.id === activity.project_id) ?? null : null;
+                              const apro = activity.project_id ? projectById.get(activity.project_id) ?? null : null;
                               return (
                                 <ActivityLeafRow
                                   key={activity.id}
@@ -1274,29 +1658,9 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
       </div>
 
       {/* ── Right: timeline (Pro only) ──────────────────────────────────── */}
-      {!showTimeline ? (
-        <div className="glass-card" style={{ width: 270, height: '100%', flexShrink: 0, padding: '28px 18px', textAlign: 'center' }}>
-          <CalendarDays size={24} strokeWidth={1.7} style={{ color: 'rgba(45,212,191,0.78)', margin: '0 auto 10px' }} />
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Timeline</div>
-          <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.38)', marginBottom: 16, lineHeight: 1.5 }}>
-            Visual day timeline is a Pro feature
-          </div>
-          <button
-            className="btn-primary"
-            style={{ fontSize: 11.5, padding: '6px 14px' }}
-            onClick={onUpgrade}
-          >
-            Upgrade →
-          </button>
-        </div>
-      ) : (
+      {showTimeline && (
         <div
-          className="glass-card"
-          style={{
-            width: 360, height: '100%', flexShrink: 0, padding: 0, overflow: 'hidden',
-            display: 'flex', flexDirection: 'column',
-            maxHeight: '100%',
-          }}
+          className="glass-card review-timeline-panel"
         >
           {/* Timeline header */}
           <div style={{
@@ -1307,15 +1671,15 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           }}>
             <span style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.45)' }}>Timeline</span>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(45,212,191,0.80)', fontVariantNumeric: 'tabular-nums' }}>
-              {formatDuration(totalSecs)}
+              {formatDuration(filteredTotalSecs)}
             </span>
           </div>
 
           {/* Scrollable grid */}
           <div ref={scrollRef} style={{ overflowY: 'auto', flex: 1 }}>
-            <div style={{ position: 'relative', height: 24 * HOUR_HEIGHT }}>
+            <div role="list" aria-label="Filtered activity timeline" style={{ position: 'relative', height: 24 * HOUR_HEIGHT }}>
               {hours.map((h) => (
-                <div key={h} style={{
+                <div key={h} role="presentation" aria-hidden="true" style={{
                   position: 'absolute', top: h * HOUR_HEIGHT, left: 0, right: 0,
                   height: HOUR_HEIGHT, display: 'flex', alignItems: 'flex-start',
                 }}>
@@ -1333,7 +1697,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
               {timelineBlocks.map((a) => {
                 const top    = Math.max(0, tsToY(a.started_at));
                 const height = Math.max(MIN_TIMELINE_BLOCK_HEIGHT, (a.duration_s! / 3600) * HOUR_HEIGHT);
-                const proj   = projects.find((p) => p.id === a.project_id);
+                const proj   = a.project_id ? projectById.get(a.project_id) : undefined;
                 const color  = proj?.color ?? 'rgba(255,255,255,0.18)';
                 const isHighlighted = hoveredActivityIds?.has(a.id) ?? false;
                 const isTimelineHovered = hovered?.id === a.id;
@@ -1345,6 +1709,9 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                 return (
                   <div
                     key={a.id}
+                    className="review-timeline-block"
+                    role="listitem"
+                    aria-label={`${displayAppName(a.app_name)}, ${format(fromUnixTime(a.started_at), 'HH:mm')}, ${formatDuration(a.duration_s ?? 0)}${proj ? `, ${proj.name}` : ', unassigned'}`}
                     onMouseEnter={(e) => { setHovered(a); setTipPos({ x: e.clientX, y: e.clientY }); }}
                     onMouseMove={(e)  => setTipPos({ x: e.clientX, y: e.clientY })}
                     onMouseLeave={()  => setHovered(null)}
@@ -1375,7 +1742,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
               })}
 
               {nowY !== null && (
-                <div style={{
+                <div role="presentation" aria-hidden="true" style={{
                   position: 'absolute', top: nowY, left: GUTTER - 4, right: 0,
                   height: 1.5, background: 'rgba(45,212,191,0.75)', pointerEvents: 'none',
                 }}>
@@ -1390,12 +1757,13 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           </div>
         </div>
       )}
+      </div>
 
       {/* Tooltip */}
       {hovered && isPro(tier) && (
         <Tooltip
           activity={hovered}
-          project={projects.find((p) => p.id === hovered.project_id)}
+          project={hovered.project_id ? projectById.get(hovered.project_id) : undefined}
           pos={tipPos}
         />
       )}
@@ -1547,18 +1915,19 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
 
       {/* ── Edit modal ─────────────────────────────────────────────────── */}
       {editingTarget && (
-        <EditModal onClose={() => setEditingTarget(null)}>
+        <EditModal onClose={closeEdit}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <FieldLabel>Title</FieldLabel>
-            <input className="glass-input" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} style={{ fontSize: 13 }} autoFocus />
+            <FieldLabel htmlFor="review-edit-application">Application</FieldLabel>
+            <input id="review-edit-application" className="glass-input" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} style={{ fontSize: 13 }} autoFocus />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <FieldLabel>Note (optional)</FieldLabel>
-            <input className="glass-input" value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="Window title or note" style={{ fontSize: 12 }} />
+            <FieldLabel htmlFor="review-edit-window-title">Window title or note</FieldLabel>
+            <input id="review-edit-window-title" className="glass-input" value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="Optional context shown in Review" style={{ fontSize: 12 }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <FieldLabel>Project</FieldLabel>
+            <FieldLabel htmlFor="review-edit-project">Project</FieldLabel>
             <Select
+              id="review-edit-project"
               value={editProject}
               onChange={setEditProject}
               options={[
@@ -1581,12 +1950,12 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           {editingTarget.activityIds.length === 1 && !editingTarget.base.time_clipped ? (
             <div style={{ display: 'flex', gap: 10 }}>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <FieldLabel>Start</FieldLabel>
-                <input type="time" className="glass-input" value={editStart} onChange={(e) => setEditStart(e.target.value)} style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }} />
+                <FieldLabel htmlFor="review-edit-start">Start</FieldLabel>
+                <input id="review-edit-start" type="time" className="glass-input" value={editStart} onChange={(e) => setEditStart(e.target.value)} style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }} />
               </div>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <FieldLabel>End</FieldLabel>
-                <input type="time" className="glass-input" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }} />
+                <FieldLabel htmlFor="review-edit-end">End</FieldLabel>
+                <input id="review-edit-end" type="time" className="glass-input" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }} />
               </div>
             </div>
           ) : (

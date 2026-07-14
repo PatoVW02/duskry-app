@@ -1,0 +1,712 @@
+.review-page {
+  --review-accent: rgb(45, 212, 191);
+  --review-attention: rgb(251, 191, 36);
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-width: 1240px;
+  margin: 0 auto;
+  flex-direction: column;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.review-page h1,
+.review-page h2,
+.review-page p {
+  margin: 0;
+}
+
+.review-page button,
+.review-page input {
+  font: inherit;
+}
+
+.review-page .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.review-overview {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 14px;
+  background: rgba(8, 18, 24, 0.46);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+}
+
+.review-overview__copy {
+  min-width: 250px;
+  flex: 1 1 360px;
+}
+
+.review-overview__eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: rgba(255, 255, 255, 0.36);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.review-overview h1 {
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 20px;
+  font-weight: 670;
+  letter-spacing: -0.025em;
+}
+
+.review-overview p {
+  max-width: 590px;
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.review-overview__upgrade {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 0;
+  border: 0;
+  color: rgba(94, 234, 212, 0.7);
+  background: transparent;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.review-overview__upgrade:hover {
+  color: rgba(153, 246, 228, 0.95);
+}
+
+.review-overview__stats {
+  display: grid;
+  min-width: 390px;
+  grid-template-columns: repeat(4, minmax(76px, 1fr));
+  gap: 7px;
+}
+
+.review-stat {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.review-stat span,
+.review-stat strong {
+  display: block;
+}
+
+.review-stat span {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-stat strong {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.review-stat--attention {
+  border-color: rgba(251, 191, 36, 0.22);
+  background: rgba(251, 191, 36, 0.07);
+}
+
+.review-stat--attention strong {
+  color: rgba(253, 224, 71, 0.94);
+}
+
+.review-workspace {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: stretch;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.review-activity-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.review-activity-panel {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 160px;
+  max-height: 100%;
+  padding: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  background: rgba(8, 18, 24, 0.54);
+}
+
+.review-panel-heading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 15px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.review-panel-heading h2 {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.review-panel-heading p {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.review-panel-heading__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-view-toggle {
+  display: flex;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.review-view-toggle button {
+  min-height: 27px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.42);
+  background: transparent;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.review-view-toggle button[aria-pressed='true'] {
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.105);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+}
+
+.review-select-all {
+  min-height: 29px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.review-app-count {
+  color: rgba(255, 255, 255, 0.34);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.review-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.review-search {
+  display: flex;
+  min-width: min(100%, 300px);
+  height: 33px;
+  flex: 1 1 300px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.105);
+  border-radius: 9px;
+  color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.04);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.review-search:focus-within {
+  border-color: rgba(45, 212, 191, 0.46);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.review-search input {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: rgba(255, 255, 255, 0.84);
+  background: transparent;
+  font-size: 11.5px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.review-search input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.review-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.review-search button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.44);
+  background: transparent;
+  cursor: pointer;
+}
+
+.review-search button:hover {
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.review-filters {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 390px;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.review-filter {
+  display: inline-flex;
+  min-height: 33px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.46);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.review-filter strong {
+  min-width: 17px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.43);
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  text-align: center;
+}
+
+.review-filter:hover {
+  color: rgba(255, 255, 255, 0.72);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.review-filter--active {
+  color: rgba(153, 246, 228, 0.95);
+  border-color: rgba(45, 212, 191, 0.3);
+  background: rgba(45, 212, 191, 0.105);
+}
+
+.review-filter--active strong {
+  color: rgba(153, 246, 228, 0.9);
+  background: rgba(45, 212, 191, 0.12);
+}
+
+.review-inline-status {
+  display: flex;
+  min-height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 15px;
+  color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.018);
+  font-size: 10.5px;
+}
+
+.review-inline-status--error {
+  color: rgba(253, 186, 116, 0.86);
+  background: rgba(248, 113, 113, 0.055);
+}
+
+.review-inline-status--error span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-inline-status button {
+  padding: 2px 7px;
+  border: 1px solid rgba(248, 113, 113, 0.2);
+  border-radius: 6px;
+  color: rgba(254, 202, 202, 0.9);
+  background: rgba(248, 113, 113, 0.08);
+  cursor: pointer;
+}
+
+.review-spin {
+  animation: review-spin 900ms linear infinite;
+}
+
+@keyframes review-spin {
+  to { transform: rotate(360deg); }
+}
+
+.review-activity-scroll {
+  min-height: 0;
+  flex: 1;
+  padding: 6px 8px 10px;
+  overflow-y: auto;
+}
+
+.review-state {
+  display: flex;
+  min-height: 190px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 28px;
+  color: rgba(94, 234, 212, 0.66);
+  text-align: center;
+}
+
+.review-state strong {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.review-state span {
+  max-width: 360px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.review-state button {
+  width: auto;
+  margin-top: 5px;
+  padding: 6px 12px;
+  font-size: 11px;
+}
+
+.review-state--error {
+  color: rgba(248, 113, 113, 0.82);
+}
+
+.review-page .activity-tree-row {
+  min-height: 38px;
+  height: auto;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 7px;
+  border-radius: 8px;
+}
+
+.review-page .activity-tree-row:focus-visible {
+  outline: 2px solid rgba(45, 212, 191, 0.78);
+  outline-offset: -2px;
+}
+
+.review-row-disclosure,
+.review-row-label-button {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.review-row-disclosure {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  place-items: center;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.review-row-disclosure:hover,
+.review-row-disclosure:focus-visible {
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.review-row-label-button {
+  display: block;
+  min-height: 24px;
+  text-align: left;
+}
+
+.review-row-label-button:focus-visible {
+  border-radius: 5px;
+  outline: 2px solid rgba(45, 212, 191, 0.72);
+  outline-offset: 2px;
+}
+
+.review-row-count {
+  flex: 0 0 auto;
+  margin-right: 7px;
+  color: rgba(255, 255, 255, 0.27);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.review-row-status,
+.review-row-assignment {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 22px;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.review-row-assignment > span:last-child {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-row-status--attention {
+  border-color: rgba(251, 191, 36, 0.2);
+  color: rgba(253, 224, 71, 0.82);
+  background: rgba(251, 191, 36, 0.07);
+}
+
+.review-row-assignment--unassigned {
+  border-color: rgba(251, 191, 36, 0.16);
+  color: rgba(253, 230, 138, 0.65);
+}
+
+.review-row-assignment--mixed {
+  border-color: rgba(167, 139, 250, 0.17);
+  color: rgba(196, 181, 253, 0.7);
+  background: rgba(139, 92, 246, 0.055);
+}
+
+.review-row-assignment--compact {
+  min-height: 19px;
+  max-width: 96px;
+  padding: 1px 6px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 9px;
+}
+
+.review-page .icon-delete-button,
+.review-page .review-row-edit-button {
+  min-width: 25px;
+  min-height: 25px;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.review-page .activity-tree-row:hover .icon-delete-button,
+.review-page .activity-tree-row:focus-within .icon-delete-button,
+.review-page .icon-delete-button:focus-visible,
+.review-page .activity-tree-row:hover .review-row-edit-button,
+.review-page .activity-tree-row:focus-within .review-row-edit-button,
+.review-page .review-row-edit-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.review-page .review-row-edit-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.38);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.review-page .review-row-edit-button:hover {
+  color: rgba(153, 246, 228, 0.9);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.review-page .icon-delete-button:hover {
+  color: rgba(248, 113, 113, 0.92) !important;
+  background: rgba(248, 113, 113, 0.1) !important;
+}
+
+.review-timeline-panel {
+  display: flex;
+  width: 320px;
+  height: 100%;
+  max-height: 100%;
+  flex: 0 0 320px;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  background: rgba(8, 18, 24, 0.5);
+}
+
+@media (max-width: 1180px) {
+  .review-overview {
+    gap: 14px;
+  }
+
+  .review-overview__stats {
+    min-width: 340px;
+  }
+
+  .review-timeline-panel {
+    width: 294px;
+    flex-basis: 294px;
+  }
+}
+
+@media (max-width: 1080px) {
+  .review-timeline-panel {
+    display: none;
+  }
+
+  .review-overview__stats {
+    min-width: 320px;
+  }
+}
+
+@media (max-width: 900px) {
+  .review-overview {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .review-overview__stats {
+    min-width: 0;
+  }
+
+  .review-panel-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .review-panel-heading__actions {
+    width: 100%;
+  }
+
+  .review-app-count {
+    margin-left: auto;
+  }
+
+  .review-row-count {
+    display: none;
+  }
+}
+
+@media (hover: none) {
+  .review-page .icon-delete-button,
+  .review-page .review-row-edit-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-spin {
+    animation-duration: 1800ms;
+  }
+
+  .review-filter,
+  .review-search,
+  .review-page .icon-delete-button,
+  .review-page .review-row-edit-button {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .review-overview,
+  .review-activity-panel,
+  .review-timeline-panel {
+    background: rgb(11, 24, 29);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .review-page .icon-delete-button,
+  .review-page .review-row-edit-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .review-filter--active,
+  .review-stat--attention,
+  .review-row-status--attention {
+    border-color: Highlight;
+  }
+}
