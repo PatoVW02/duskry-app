@@ -5,7 +5,7 @@ import { openCheckout, openAnnualCheckout } from '../../lib/checkout';
 import { usePricesStore } from '../../stores/usePricesStore';
 import { errorMessage } from '../../lib/utils';
 import { billingPlansEnabled } from '../../lib/featureFlags';
-import { Check } from 'lucide-react';
+import { Check, Clock3 } from 'lucide-react';
 
 type PlanChoice = 'free' | 'pro' | 'proPlus';
 
@@ -15,6 +15,8 @@ export function PaywallModal() {
   const trialEmail = useLicenseStore((s) => s.trialEmail);
   const activateLicense = useLicenseStore((s) => s.activateLicense);
   const downgradeFree = useLicenseStore((s) => s.downgradeFree);
+  const fetchTier = useLicenseStore((s) => s.fetchTier);
+  const refreshing = useLicenseStore((s) => s.refreshing);
   const prices = usePricesStore((s) => s.prices);
 
   const [chosen, setChosen] = useState<PlanChoice>(
@@ -28,6 +30,7 @@ export function PaywallModal() {
   const [downgrading, setDowngrading] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutPending, setCheckoutPending] = useState(false);
 
   if (!billingPlansEnabled || tier !== 'expired') return null;
 
@@ -44,10 +47,18 @@ export function PaywallModal() {
     }
   };
 
+  const handleUseFree = async () => {
+    setDowngrading(true);
+    try {
+      await downgradeFree();
+    } finally {
+      setDowngrading(false);
+    }
+  };
+
   const handleContinue = async () => {
     if (chosen === 'free') {
-      setDowngrading(true);
-      try { await downgradeFree(); } finally { setDowngrading(false); }
+      await handleUseFree();
       return;
     }
     setCheckoutLoading(true);
@@ -58,6 +69,7 @@ export function PaywallModal() {
       } else {
         await openCheckout(chosen === 'proPlus' ? 'proplus_monthly' : 'pro_monthly', trialEmail || undefined);
       }
+      setCheckoutPending(true);
     } catch (error) {
       setCheckoutError(errorMessage(error, 'Could not open checkout.'));
     } finally {
@@ -99,7 +111,13 @@ export function PaywallModal() {
   ];
 
   return (
-    <div className="paywall-overlay">
+    <div
+      className="paywall-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="expired-trial-title"
+      aria-describedby="expired-trial-description"
+    >
       <SceneBackground />
       <div className="scene-overlay" />
       <div
@@ -112,10 +130,10 @@ export function PaywallModal() {
       >
         {/* Header */}
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 26, marginBottom: 10 }}>⏱</div>
-          <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>Your free trial has ended</div>
-          <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.45)' }}>
-            Choose a plan to continue. You can upgrade anytime.
+          <Clock3 size={26} aria-hidden="true" style={{ marginBottom: 10, color: 'rgba(94,234,212,0.82)' }} />
+          <div id="expired-trial-title" style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>Your free trial has ended</div>
+          <div id="expired-trial-description" style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.45)' }}>
+            Your data is safe. Continue with Free, or subscribe to keep paid features.
           </div>
         </div>
 
@@ -126,6 +144,7 @@ export function PaywallModal() {
               <button
                 key={b}
                 onClick={() => setBilling(b)}
+                aria-pressed={billing === b}
                 style={{
                   flex: 1, padding: '6px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12,
                   fontFamily: 'Inter, sans-serif', fontWeight: billing === b ? 500 : 400,
@@ -134,7 +153,7 @@ export function PaywallModal() {
                   transition: 'all 0.13s',
                 }}
               >
-                {b === 'monthly' ? 'Monthly' : 'Yearly — Save 33%'}
+                {b === 'monthly' ? 'Monthly' : 'Yearly'}
               </button>
             ))}
           </div>
@@ -148,6 +167,7 @@ export function PaywallModal() {
               <button
                 key={plan.id}
                 onClick={() => setChosen(plan.id)}
+                aria-pressed={active}
                 style={{
                   flex: 1, display: 'flex', flexDirection: 'column', padding: '14px 12px',
                   borderRadius: 12, textAlign: 'left', cursor: 'pointer',
@@ -196,7 +216,47 @@ export function PaywallModal() {
         </div>
 
         {/* CTA */}
-        {checkoutError && <div role="alert" style={{ fontSize: 12, color: '#f87171', textAlign: 'center' }}>{checkoutError}</div>}
+        {checkoutError && (
+          <div role="alert" style={{
+            padding: '10px 12px', borderRadius: 8, fontSize: 12, lineHeight: 1.45,
+            color: '#f87171', background: 'rgba(239,68,68,0.08)',
+            border: '0.5px solid rgba(239,68,68,0.26)',
+          }}>
+            <strong>Checkout did not open.</strong> {checkoutError}
+          </div>
+        )}
+        {checkoutPending && !checkoutError && (
+          <div role="status" aria-live="polite" style={{
+            padding: '11px 13px', borderRadius: 8,
+            background: 'rgba(45,212,191,0.08)', border: '0.5px solid rgba(45,212,191,0.24)',
+          }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'rgba(255,255,255,0.80)' }}>
+              Finish your purchase in the browser
+            </div>
+            <div style={{ fontSize: 11.5, lineHeight: 1.45, color: 'rgba(255,255,255,0.52)', marginTop: 3 }}>
+              Return here afterward and enter the license key from your receipt. If this device was already activated, check its status.
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowKeyInput(true)}
+                style={{ padding: '6px 10px', fontSize: 11.5 }}
+              >
+                Enter license key
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void fetchTier()}
+                disabled={refreshing}
+                style={{ padding: '6px 10px', fontSize: 11.5 }}
+              >
+                {refreshing ? 'Checking…' : 'Check status'}
+              </button>
+            </div>
+          </div>
+        )}
         <button
           className={chosen === 'free' ? 'btn-secondary' : 'btn-primary'}
           onClick={handleContinue}
@@ -207,8 +267,22 @@ export function PaywallModal() {
             ? 'Applying…'
             : chosen === 'free'
               ? 'Continue with Free'
-              : `Subscribe to ${chosen === 'proPlus' ? 'Pro+' : 'Pro'} →`}
+              : checkoutPending
+                ? `Reopen ${chosen === 'proPlus' ? 'Pro+' : 'Pro'} checkout →`
+                : `Subscribe to ${chosen === 'proPlus' ? 'Pro+' : 'Pro'} →`}
         </button>
+
+        {chosen !== 'free' && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => void handleUseFree()}
+            disabled={downgrading || checkoutLoading}
+            style={{ fontSize: 13 }}
+          >
+            Continue with Free instead
+          </button>
+        )}
 
         {/* License key */}
         {!showKeyInput ? (
@@ -222,6 +296,7 @@ export function PaywallModal() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: -8 }}>
             <input
               className="glass-input"
+              aria-label="License key"
               placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
               value={key}
               onChange={(e) => setKey(e.target.value)}
@@ -239,7 +314,7 @@ export function PaywallModal() {
         )}
 
         <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.22)', textAlign: 'center', margin: 0 }}>
-          Cancel anytime
+          Free remains available anytime. Paid plans can be managed in the billing portal.
         </p>
       </div>
     </div>

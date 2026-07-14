@@ -6,7 +6,7 @@ import { useSettingsStore } from '../stores/useSettingsStore';
 import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { PROJECT_COLORS } from '../styles/tokens';
-import { Plus, ChevronDown, ChevronRight, X, Target, Lock, Trash2 } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, X, Target, Lock, Trash2, Pause, Play } from 'lucide-react';
 import { Select } from '../components/ui/Select';
 import { formatDuration } from '../lib/utils';
 
@@ -17,6 +17,11 @@ interface Rule {
   operator: string;
   value: string;
   priority: number;
+  source: 'manual' | 'learned' | string;
+  enabled: boolean;
+  confidence: number | null;
+  support_count: number;
+  created_at: number | null;
 }
 
 interface RuleCondition {
@@ -63,7 +68,8 @@ interface AppActivityGroup {
 const FIELD_OPTIONS = [
   { value: 'app',   label: 'App name' },
   { value: 'title', label: 'Window title' },
-  { value: 'url',   label: 'Browser URL' },
+  { value: 'url',   label: 'Website' },
+  { value: 'path',  label: 'File path' },
 ];
 
 const OPERATOR_OPTIONS = [
@@ -72,6 +78,13 @@ const OPERATOR_OPTIONS = [
   { value: 'starts_with', label: 'starts with' },
   { value: 'ends_with',   label: 'ends with' },
 ];
+
+const operatorOptionsForField = (field: string) => field === 'url'
+  ? [
+      { value: 'host_equals', label: 'matches website' },
+      { value: 'contains', label: 'hostname contains' },
+    ]
+  : OPERATOR_OPTIONS;
 
 const emptyCondition = (): RuleCondition => ({
   type: 'condition',
@@ -126,7 +139,7 @@ function fieldLabel(field: string) {
   return field === 'app'
     ? 'app name'
     : field === 'url'
-      ? 'browser URL'
+      ? 'website hostname'
       : field === 'title'
         ? 'window title'
         : field === 'hour'
@@ -135,7 +148,9 @@ function fieldLabel(field: string) {
 }
 
 function operatorLabel(operator: string) {
-  return operator === 'between_minutes' ? 'is between' : operator.replace('_', ' ');
+  if (operator === 'between_minutes') return 'is between';
+  if (operator === 'host_equals') return 'matches website';
+  return operator.replace('_', ' ');
 }
 
 function formatMinutesLabel(value: string) {
@@ -293,6 +308,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
   const [ruleCombinator, setRuleCombinator] = useState<'and' | 'or'>('and');
   const [ruleNodes, setRuleNodes] = useState<RuleNode[]>(() => [emptyCondition()]);
   const [savingRule, setSavingRule]     = useState(false);
+  const [ruleError, setRuleError] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
 
@@ -352,10 +368,12 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
     if (expandedId === id) {
       setExpandedId(null);
       setAddingRuleFor(null);
+      setRuleError(null);
       return;
     }
     setExpandedId(id);
     setAddingRuleFor(null);
+    setRuleError(null);
     setRuleCombinator('and');
     setRuleNodes([emptyCondition()]);
     await loadRules(id);
@@ -367,36 +385,43 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
       .filter((node): node is RuleNode => node !== null);
     if (cleanedNodes.length === 0) return;
     setSavingRule(true);
+    setRuleError(null);
     const first = cleanedNodes[0];
     const isSimple = cleanedNodes.length === 1 && !isGroup(first) && !first.negated;
-    const ruleId = await invoke<number>('create_rule', {
-      projectId,
-      field: isSimple ? first.field : 'compound',
-      operator: isSimple ? first.operator : 'matches',
-      value: isSimple ? first.value : JSON.stringify({ combinator: ruleCombinator, conditions: cleanedNodes.map(stripNodeTypes) }),
-      priority: 0,
-    });
-    await loadRules(projectId);
-    setRuleCombinator('and');
-    setRuleNodes([emptyCondition()]);
-    setAddingRuleFor(null);
-    setSavingRule(false);
-    // offer retroactive application
-    const today = new Date().toISOString().split('T')[0];
-    const project = projects.find((p) => p.id === projectId);
-    setApplyFromDate(today);
-    setApplyToDate(today);
-    setApplyRange('today');
-    setApplyResult(null);
-    setRuleApplyModal({
-      ruleId,
-      projectId,
-      projectName: project?.name ?? 'this project',
-      projectColor: project?.color ?? '#86EFAC',
-    });
+    try {
+      const ruleId = await invoke<number>('create_rule', {
+        projectId,
+        field: isSimple ? first.field : 'compound',
+        operator: isSimple ? first.operator : 'matches',
+        value: isSimple ? first.value : JSON.stringify({ combinator: ruleCombinator, conditions: cleanedNodes.map(stripNodeTypes) }),
+        priority: 0,
+      });
+      await loadRules(projectId);
+      setRuleCombinator('and');
+      setRuleNodes([emptyCondition()]);
+      setAddingRuleFor(null);
+      // offer retroactive application
+      const today = new Date().toISOString().split('T')[0];
+      const project = projects.find((p) => p.id === projectId);
+      setApplyFromDate(today);
+      setApplyToDate(today);
+      setApplyRange('today');
+      setApplyResult(null);
+      setRuleApplyModal({
+        ruleId,
+        projectId,
+        projectName: project?.name ?? 'this project',
+        projectColor: project?.color ?? '#86EFAC',
+      });
+    } catch (error) {
+      setRuleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRule(false);
+    }
   };
 
   const updateRuleNode = (path: number[], updater: (node: RuleNode) => RuleNode) => {
+    setRuleError(null);
     const updateAtPath = (nodes: RuleNode[], depth: number): RuleNode[] => {
       const index = path[depth];
       return nodes.map((node, i) => {
@@ -474,6 +499,11 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
 
   const handleDeleteRule = async (ruleId: number, projectId: number) => {
     await invoke('delete_rule', { ruleId });
+    await loadRules(projectId);
+  };
+
+  const handleToggleRule = async (ruleId: number, projectId: number, enabled: boolean) => {
+    await invoke('set_rule_enabled', { ruleId, enabled });
     await loadRules(projectId);
   };
 
@@ -607,11 +637,20 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
         >
           NOT
         </button>
-        <Select value={node.field} onChange={(v) => updateRuleCondition(path, { field: v })} options={FIELD_OPTIONS} />
-        <Select value={node.operator} onChange={(v) => updateRuleCondition(path, { operator: v })} options={OPERATOR_OPTIONS} />
+        <Select
+          value={node.field}
+          onChange={(v) => updateRuleCondition(path, {
+            field: v,
+            operator: operatorOptionsForField(v).some((option) => option.value === node.operator)
+              ? node.operator
+              : v === 'url' ? 'host_equals' : 'contains',
+          })}
+          options={FIELD_OPTIONS}
+        />
+        <Select value={node.operator} onChange={(v) => updateRuleCondition(path, { operator: v })} options={operatorOptionsForField(node.field)} />
         <input
           className="glass-input"
-          placeholder="e.g. VS Code"
+          placeholder={node.field === 'url' ? 'e.g. github.com' : node.field === 'path' ? 'e.g. /Projects/Duskry' : 'e.g. VS Code'}
           value={node.value}
           onChange={(e) => updateRuleCondition(path, { value: e.target.value })}
           onKeyDown={(e) => e.key === 'Enter' && addingRuleFor && handleAddRule(addingRuleFor)}
@@ -962,6 +1001,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                               display: 'flex', alignItems: compound && !singleCompoundCondition ? 'flex-start' : 'center', gap: 8,
                               padding: '6px 0',
                               borderBottom: '0.5px solid rgba(255,255,255,0.05)',
+                              opacity: r.enabled ? 1 : 0.46,
                             }}>
                               {singleCompoundCondition ? (
                                 <>
@@ -1007,6 +1047,32 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                                   </span>
                                 </>
                               )}
+                              {r.source === 'learned' && (
+                                <span
+                                  title={`Learned from ${r.support_count} corrections${r.confidence != null ? ` · ${Math.round(r.confidence * 100)}% confidence` : ''}`}
+                                  style={{
+                                    flexShrink: 0, fontSize: 9.5, fontWeight: 600,
+                                    color: 'rgba(45,212,191,0.72)',
+                                    border: '0.5px solid rgba(45,212,191,0.18)',
+                                    background: 'rgba(45,212,191,0.07)',
+                                    padding: '2px 6px', borderRadius: 999,
+                                  }}
+                                >
+                                  Learned{r.confidence != null ? ` ${Math.round(r.confidence * 100)}%` : ''}
+                                </span>
+                              )}
+                              <button
+                                onClick={() => handleToggleRule(r.id, pid, !r.enabled)}
+                                title={r.enabled ? 'Pause rule' : r.source === 'learned' ? 'Resume as a manual rule' : 'Resume rule'}
+                                aria-label={r.enabled ? 'Pause rule' : r.source === 'learned' ? 'Resume as a manual rule' : 'Resume rule'}
+                                style={{
+                                  background: 'none', border: 'none', cursor: 'pointer',
+                                  color: 'rgba(255,255,255,0.28)', padding: '2px', display: 'flex', alignItems: 'center',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {r.enabled ? <Pause size={11} /> : <Play size={11} />}
+                              </button>
                               <button
                                 onClick={() => handleDeleteRule(r.id, pid)}
                                 title="Delete rule"
@@ -1075,6 +1141,11 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                               <Plus size={11} /> Add group
                             </button>
                           </div>
+                          {ruleError && (
+                            <div role="alert" style={{ fontSize: 11.5, lineHeight: 1.45, color: 'rgba(252,165,165,0.92)' }}>
+                              {ruleError}
+                            </div>
+                          )}
                           <div style={{ display: 'flex', gap: 6 }}>
                             <button
                               className="btn-primary"
@@ -1086,7 +1157,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                             </button>
                             <button
                               className="btn-secondary"
-                              onClick={() => { setAddingRuleFor(null); setRuleCombinator('and'); setRuleNodes([emptyCondition()]); }}
+                              onClick={() => { setAddingRuleFor(null); setRuleError(null); setRuleCombinator('and'); setRuleNodes([emptyCondition()]); }}
                               style={{ fontSize: 12, padding: '5px 14px', width: 'auto' }}
                             >
                               Cancel
@@ -1095,7 +1166,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                         </div>
                       ) : isPro(tier) ? (
                         <button
-                          onClick={() => { setAddingRuleFor(pid); setRuleCombinator('and'); setRuleNodes([emptyCondition()]); }}
+                          onClick={() => { setAddingRuleFor(pid); setRuleError(null); setRuleCombinator('and'); setRuleNodes([emptyCondition()]); }}
                           style={{
                             marginTop: 8,
                             background: 'none',

@@ -1,6 +1,6 @@
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
@@ -113,11 +113,14 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             let _ =
                 crate::db::set_setting("tracking_paused", if new_val { "true" } else { "false" });
             let _ = rebuild_tray(app);
+            let _ = app.emit("settings-changed", ());
         }
         "clear_focus" => {
             crate::tracker::ACTIVE_PROJECT_ID.store(0, std::sync::atomic::Ordering::SeqCst);
             let _ = crate::db::set_setting("active_project_id", "0");
+            let _ = crate::db::set_setting("active_project_date", "");
             let _ = rebuild_tray(app);
+            let _ = app.emit("settings-changed", ());
         }
         "quit" => {
             crate::request_real_quit(app);
@@ -128,7 +131,10 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                     crate::tracker::ACTIVE_PROJECT_ID
                         .store(pid, std::sync::atomic::Ordering::SeqCst);
                     let _ = crate::db::set_setting("active_project_id", &pid.to_string());
+                    let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+                    let _ = crate::db::set_setting("active_project_date", &day);
                     let _ = rebuild_tray(app);
+                    let _ = app.emit("settings-changed", ());
                 }
             }
         }

@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { DEFAULT_AUTO_SCENE_SCHEDULE, type AutoSceneSlot, type SceneId } from '../lib/sceneConfig';
 import { normalizeAutoSceneSchedule } from '../lib/utils';
 
+export type RuleAutomationMode = 'off' | 'suggest' | 'automatic';
+
 interface SettingsStore {
   scene: SceneId;
   sceneAuto: boolean;
@@ -16,6 +18,8 @@ interface SettingsStore {
   rulesOverrideActive: boolean;
   autoRuleSuggestionsEnabled: boolean;
   autoCreateSuggestedRulesEnabled: boolean;
+  ruleAutomationMode: RuleAutomationMode;
+  ruleAutomationSaving: boolean;
   trackingPaused: boolean;
   idleThresholdSecs: number;
   loadSettings: () => Promise<void>;
@@ -31,11 +35,12 @@ interface SettingsStore {
   setRulesOverrideActive: (enabled: boolean) => Promise<void>;
   setAutoRuleSuggestionsEnabled: (enabled: boolean) => Promise<void>;
   setAutoCreateSuggestedRulesEnabled: (enabled: boolean) => Promise<void>;
+  setRuleAutomationMode: (mode: RuleAutomationMode) => Promise<void>;
   setTrackingPaused: (paused: boolean) => Promise<void>;
   setIdleThreshold: (secs: number) => Promise<void>;
 }
 
-export const useSettingsStore = create<SettingsStore>((set) => ({
+export const useSettingsStore = create<SettingsStore>((set, get) => ({
   scene: 'night-mountains',
   sceneAuto: true,
   autoSceneSchedule: DEFAULT_AUTO_SCENE_SCHEDULE,
@@ -47,6 +52,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   rulesOverrideActive: true,
   autoRuleSuggestionsEnabled: true,
   autoCreateSuggestedRulesEnabled: false,
+  ruleAutomationMode: 'suggest',
+  ruleAutomationSaving: false,
   trackingPaused: false,
   idleThresholdSecs: 300,
 
@@ -65,6 +72,9 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
       const parsedSchedule = autoSceneSchedule
         ? normalizeAutoSceneSchedule(JSON.parse(autoSceneSchedule) as AutoSceneSlot[])
         : DEFAULT_AUTO_SCENE_SCHEDULE;
+      const configuredSuggestionsEnabled = autoRuleSuggestions == null ? true : autoRuleSuggestions === 'true';
+      const automaticEnabled = autoCreateSuggestedRules === 'true';
+      const suggestionsEnabled = automaticEnabled || configuredSuggestionsEnabled;
       set({
         scene: (scene ?? 'night-mountains') as SceneId,
         sceneAuto: sceneAuto == null ? true : sceneAuto === 'true',
@@ -72,8 +82,9 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
         onboardingComplete: ob === 'true',
         activeProjectId: activeProject,
         rulesOverrideActive: rulesOverride,
-        autoRuleSuggestionsEnabled: autoRuleSuggestions == null ? true : autoRuleSuggestions === 'true',
-        autoCreateSuggestedRulesEnabled: autoCreateSuggestedRules === 'true',
+        autoRuleSuggestionsEnabled: suggestionsEnabled,
+        autoCreateSuggestedRulesEnabled: automaticEnabled,
+        ruleAutomationMode: automaticEnabled ? 'automatic' : suggestionsEnabled ? 'suggest' : 'off',
         trackingPaused: paused,
         idleThresholdSecs: idleThreshold,
       });
@@ -131,13 +142,32 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   },
 
   setAutoRuleSuggestionsEnabled: async (enabled) => {
-    await invoke('set_setting', { key: 'auto_rule_suggestions_enabled', value: String(enabled) });
-    set({ autoRuleSuggestionsEnabled: enabled });
+    const mode = enabled
+      ? get().autoCreateSuggestedRulesEnabled ? 'automatic' : 'suggest'
+      : 'off';
+    await get().setRuleAutomationMode(mode);
   },
 
   setAutoCreateSuggestedRulesEnabled: async (enabled) => {
-    await invoke('set_setting', { key: 'auto_create_suggested_rules_enabled', value: String(enabled) });
-    set({ autoCreateSuggestedRulesEnabled: enabled });
+    const mode = enabled ? 'automatic' : get().autoRuleSuggestionsEnabled ? 'suggest' : 'off';
+    await get().setRuleAutomationMode(mode);
+  },
+
+  setRuleAutomationMode: async (mode) => {
+    if (get().ruleAutomationSaving) return;
+    const suggestionsEnabled = mode !== 'off';
+    const automaticEnabled = mode === 'automatic';
+    set({ ruleAutomationSaving: true });
+    try {
+      await invoke('set_rule_automation_mode', { mode });
+      set({
+        autoRuleSuggestionsEnabled: suggestionsEnabled,
+        autoCreateSuggestedRulesEnabled: automaticEnabled,
+        ruleAutomationMode: mode,
+      });
+    } finally {
+      set({ ruleAutomationSaving: false });
+    }
   },
 
   setTrackingPaused: async (paused) => {

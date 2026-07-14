@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { onAction } from '@tauri-apps/plugin-notification';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import './index.css';
 import { useUpdater, AUTO_UPDATE_POLL_MS } from './hooks/useUpdater';
 import { UpdaterContext } from './contexts/UpdaterContext';
@@ -11,6 +12,7 @@ import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { PaywallModal } from './components/license/PaywallModal';
 import { WhatsNewModal } from './components/whats-new/WhatsNewModal';
+import { SmartRuleNotice } from './components/rules/SmartRuleNotice';
 
 import { WelcomeScreen } from './components/onboarding/WelcomeScreen';
 import { PermissionsScreen } from './components/onboarding/PermissionsScreen';
@@ -20,32 +22,34 @@ import { TrialScreen } from './components/onboarding/TrialScreen';
 import { FirstProjectScreen } from './components/onboarding/FirstProjectScreen';
 import { AllSetScreen } from './components/onboarding/AllSetScreen';
 
-import { Overview } from './pages/Overview';
+import { Today } from './pages/Today';
 import { ActivityPage } from './pages/ActivityPage';
 import { Projects } from './pages/Projects';
+import { Rules } from './pages/Rules';
 import { Reports } from './pages/Reports';
 import { Settings, type SettingsTab } from './pages/Settings';
 
 import { useSettingsStore } from './stores/useSettingsStore';
-import { useLicenseStore } from './stores/useLicenseStore';
+import { useLicenseStore, isPro } from './stores/useLicenseStore';
 import { useProjectStore } from './stores/useProjectStore';
 import { useActivityStore } from './stores/useActivityStore';
 import { usePricesStore } from './stores/usePricesStore';
 import { billingPlansEnabled } from './lib/featureFlags';
 
-type Page = 'overview' | 'activity' | 'projects' | 'reports' | 'settings';
+type Page = 'today' | 'review' | 'projects' | 'rules' | 'reports' | 'settings';
 type OnboardingStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 const PAGE_TITLES: Record<Page, string> = {
-  overview:  'Overview',
-  activity:  'Activity',
+  today:     'Today',
+  review:    'Review',
   projects:  'Projects',
+  rules:     'Rules',
   reports:   'Reports',
   settings:  'Settings',
 };
 
 function App() {
-  const [page, setPage] = useState<Page>('overview');
+  const [page, setPage] = useState<Page>('today');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
   const [obStep, setObStep] = useState<OnboardingStep>(0);
   const [startupUpdateToast, setStartupUpdateToast] = useState<null | { kind: 'available' | 'downloaded'; version: string }>(null);
@@ -57,6 +61,7 @@ function App() {
   const scenePreviewMode = useSettingsStore((s) => s.scenePreviewMode);
   const scenePreviewScene = useSettingsStore((s) => s.scenePreviewScene);
   const closeScenePreview = useSettingsStore((s) => s.closeScenePreview);
+  const ruleAutomationMode = useSettingsStore((s) => s.ruleAutomationMode);
   const setScene = useSettingsStore((s) => s.setScene);
   const setSceneAuto = useSettingsStore((s) => s.setSceneAuto);
   const tier = useLicenseStore((s) => s.tier);
@@ -66,6 +71,7 @@ function App() {
   const viewDate = useActivityStore((s) => s.viewDate);
   const stepDate = useActivityStore((s) => s.stepDate);
   const goToToday = useActivityStore((s) => s.goToToday);
+  const clearPendingRuleSuggestions = useActivityStore((s) => s.clearPendingRuleSuggestions);
 
   // History retention cutoff: free=7d, pro/trial=90d, proPlus=unlimited
   const historyLimitDays = !billingPlansEnabled ? null : tier === 'proPlus' ? null : tier === 'pro' || tier === 'proTrial' ? 90 : 7;
@@ -99,12 +105,36 @@ function App() {
     } catch {}
   };
 
+  const openPermissionSettings = () => {
+    setSettingsTab('permissions');
+    setPage('settings');
+  };
+
   useEffect(() => {
     loadSettings();
     fetchTier();
     fetchProjects();
     fetchPrices();
   }, [loadSettings, fetchTier, fetchProjects, fetchPrices]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen('settings-changed', () => void loadSettings()).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [loadSettings]);
+
+  useEffect(() => {
+    if (ruleAutomationMode !== 'suggest' || !isPro(tier)) {
+      clearPendingRuleSuggestions();
+    }
+  }, [clearPendingRuleSuggestions, ruleAutomationMode, tier]);
 
   useEffect(() => {
     const refresh = () => void fetchTier();
@@ -193,6 +223,7 @@ function App() {
       <SceneBackground />
       <div className="scene-overlay" />
       <WhatsNewModal enabled={onboardingComplete} />
+      <SmartRuleNotice onReview={() => setPage('rules')} />
       <div className="app-content">
         <Sidebar activePage={page} onNavigate={setPage} />
         <div className={`main-area ${scenePreviewMode ? 'main-area--scene-preview' : ''}`}>
@@ -219,11 +250,15 @@ function App() {
               </div>
             </div>
           ) : (
+            page === 'today' ? (
+              <Today onReview={() => setPage('review')} onOpenPermissions={openPermissionSettings} />
+            ) : (
             <>
               <TopBar
                 title={PAGE_TITLES[page]}
                 onUpgrade={openBillingSettings}
-                dateNav={page === 'overview' || page === 'activity' || page === 'projects' ? {
+                onOpenPermissions={openPermissionSettings}
+                dateNav={page === 'review' || page === 'projects' ? {
                   viewDate,
                   onPrev:  canGoBack ? () => stepDate(-1) : undefined,
                   onNext:  () => stepDate(1),
@@ -296,15 +331,15 @@ function App() {
                   </div>
                 </div>
               )}
-              <div className={`page-content ${page === 'activity' ? 'page-content--activity' : ''}`}>
-                {page === 'overview'  && <Overview />}
-                {page === 'activity'  && <ActivityPage onUpgrade={openBillingSettings} />}
+              <div className={`page-content ${page === 'review' ? 'page-content--activity' : ''}`}>
+                {page === 'review'    && <ActivityPage onUpgrade={openBillingSettings} />}
                 {page === 'projects'  && <Projects onUpgrade={openBillingSettings} />}
+                {page === 'rules'     && <Rules onUpgrade={openBillingSettings} onOpenProjects={() => setPage('projects')} />}
                 {page === 'reports'   && <Reports onUpgrade={openBillingSettings} />}
                 {page === 'settings'  && <Settings activeTab={settingsTab} onTabChange={setSettingsTab} onUpgrade={openBillingSettings} />}
               </div>
             </>
-          )}
+          ))}
         </div>
       </div>
     </div>

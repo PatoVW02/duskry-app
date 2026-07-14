@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { isToday, startOfDay, format, fromUnixTime } from 'date-fns';
 import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
 import { CalendarDays, ChevronRight, ChevronDown, Check, Globe, Folder, Trash2, X } from 'lucide-react';
-import { useActivityStore, type Activity, type RuleSuggestion } from '../stores/useActivityStore';
+import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { formatDuration } from '../lib/utils';
@@ -231,6 +230,11 @@ function Tooltip({ activity, project, pos }: { activity: Activity; project?: Pro
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 6, paddingTop: 6, borderTop: '0.5px solid rgba(255,255,255,0.08)' }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: project.color, flexShrink: 0 }} />
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)' }}>{project.name}</span>
+        </div>
+      )}
+      {activity.assignment_reason && ['learned_rule', 'manual_rule', 'focus'].includes(activity.source ?? '') && (
+        <div style={{ fontSize: 10.5, color: 'rgba(45,212,191,0.55)', marginTop: 5 }}>
+          Assigned by {activity.assignment_reason}
         </div>
       )}
     </div>,
@@ -612,6 +616,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const viewDate        = useActivityStore((s) => s.viewDate);
   const fetchForDate    = useActivityStore((s) => s.fetchForDate);
   const assignToProject = useActivityStore((s) => s.assignToProject);
+  const assignActivitiesToProject = useActivityStore((s) => s.assignActivitiesToProject);
   const unassignFromProject = useActivityStore((s) => s.unassignFromProject);
   const deleteActivity  = useActivityStore((s) => s.deleteActivity);
   const updateActivity  = useActivityStore((s) => s.updateActivity);
@@ -623,7 +628,6 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [expandedTitles, setExpandedTitles] = useState<Set<string>>(() => new Set());
   const [hoveredActivityIds, setHoveredActivityIds] = useState<Set<number> | null>(null);
   const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
-  const [ruleSuggestion, setRuleSuggestion] = useState<RuleSuggestion | null>(null);
   const [selectedActivityIds, setSelectedActivityIds] = useState<Set<number>>(() => new Set());
   const [bulkAssignProjectId, setBulkAssignProjectId] = useState<string>('');
   const [viewMode, setViewMode] = useState<'summary' | 'details'>('summary');
@@ -670,11 +674,11 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           return updateActivity(id, nextAppName, nextWindowTitle, activity.started_at, endTs);
         }));
         if (editProject !== MIXED_PROJECT_VALUE) {
-          await Promise.all(editingTarget.activityIds.map((id) => (
-            editProject
-              ? assignToProject(id, parseInt(editProject, 10)).then(() => undefined)
-              : unassignFromProject(id)
-          )));
+          if (editProject) {
+            await assignActivitiesToProject(editingTarget.activityIds, parseInt(editProject, 10));
+          } else {
+            await Promise.all(editingTarget.activityIds.map((id) => unassignFromProject(id)));
+          }
         }
       } else {
         const base = fromUnixTime(editingTarget.base.started_at);
@@ -794,15 +798,13 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
 
   const handleDrop = useCallback(async (projectId: number, ids: number[]) => {
     if (projectId < 1 || ids.length === 0) return;
-    const suggestions = await Promise.all(ids.map((id) => assignToProject(id, projectId)));
+    await assignActivitiesToProject(ids, projectId);
     const proj = projects.find((p) => p.id === projectId);
     if (proj) showToast(proj.name, proj.color, ids.length);
-    const suggestion = suggestions.find((s): s is RuleSuggestion => s !== null);
-    if (suggestion) setRuleSuggestion(suggestion);
     if (ids.some((id) => selectedActivityIds.has(id))) {
       clearSelectedActivities();
     }
-  }, [assignToProject, clearSelectedActivities, projects, selectedActivityIds, showToast]);
+  }, [assignActivitiesToProject, clearSelectedActivities, projects, selectedActivityIds, showToast]);
 
   const handleBulkClearProject = useCallback(async () => {
     const ids = Array.from(selectedActivityIds);
@@ -824,38 +826,6 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     await handleDrop(projectId, ids);
     clearSelectedActivities();
   }, [bulkAssignProjectId, selectedActivityIds, handleDrop, clearSelectedActivities]);
-
-  const acceptRuleSuggestion = async () => {
-    if (!ruleSuggestion) return;
-    await invoke<number>('create_suggested_rule', {
-      projectId: ruleSuggestion.project_id,
-      field: ruleSuggestion.field,
-      operator: ruleSuggestion.operator,
-      value: ruleSuggestion.value,
-    });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    setToast({
-      msg: `Rule created for ${ruleSuggestion.project_name}`,
-      color: ruleSuggestion.project_color,
-    });
-    toastTimer.current = setTimeout(() => setToast(null), 2600);
-    setRuleSuggestion(null);
-  };
-
-  const keepRuleSuggestion = () => {
-    setRuleSuggestion(null);
-  };
-
-  const declineRuleSuggestion = async () => {
-    if (!ruleSuggestion) return;
-    await invoke('dismiss_rule_suggestion', {
-      projectId: ruleSuggestion.project_id,
-      field: ruleSuggestion.field,
-      operator: ruleSuggestion.operator,
-      value: ruleSuggestion.value,
-    });
-    setRuleSuggestion(null);
-  };
 
   // Ghost pill state (shown while pointer-dragging)
   const [ghost, setGhost] = useState<{ x: number; y: number; count: number } | null>(null);
@@ -1458,93 +1428,6 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
           userSelect: 'none',
         }}>
           {ghost.count} {ghost.count === 1 ? 'activity' : 'activities'}
-        </div>,
-        document.body
-      )}
-
-      {/* Auto-rule suggestion */}
-      {ruleSuggestion && createPortal(
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 4500,
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-            padding: 24,
-            pointerEvents: 'none',
-          }}
-        >
-          <div
-            className="glass-card"
-            style={{
-              width: 430,
-              padding: '16px 18px',
-              background: 'rgba(8,22,17,0.94)',
-              border: '0.5px solid rgba(255,255,255,0.14)',
-              boxShadow: '0 18px 54px rgba(0,0,0,0.46)',
-              pointerEvents: 'auto',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              <div style={{
-                width: 9,
-                height: 9,
-                borderRadius: '50%',
-                background: ruleSuggestion.project_color,
-                marginTop: 6,
-                flexShrink: 0,
-              }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: 'rgba(255,255,255,0.88)', marginBottom: 5 }}>
-                  Create an auto-assignment rule?
-                </div>
-                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.48)', lineHeight: 1.5 }}>
-                  You have assigned {ruleSuggestion.count} matching activities to{' '}
-                  <span style={{ color: ruleSuggestion.project_color, fontWeight: 600 }}>
-                    {ruleSuggestion.project_name}
-                  </span>
-                  . Duskry can assign future activities where{' '}
-                  <span style={{ color: 'rgba(255,255,255,0.72)' }}>
-                    {ruleSuggestion.label}
-                  </span>
-                  .
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={keepRuleSuggestion}
-                title="Dismiss"
-                style={{ background: 'rgba(255,255,255,0.06)', border: '0.5px solid rgba(255,255,255,0.10)', borderRadius: 8, width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.45)', cursor: 'pointer', flexShrink: 0 }}
-              >
-                <X size={13} />
-              </button>
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
-              <button
-                className="btn-secondary"
-                onClick={declineRuleSuggestion}
-                style={{ width: 'auto', fontSize: 12, padding: '7px 14px' }}
-              >
-                Do not suggest
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={keepRuleSuggestion}
-                style={{ width: 'auto', fontSize: 12, padding: '7px 14px' }}
-              >
-                Keep suggesting
-              </button>
-              <button
-                className="btn-primary"
-                onClick={acceptRuleSuggestion}
-                style={{ width: 'auto', fontSize: 12, padding: '7px 14px' }}
-              >
-                Accept
-              </button>
-            </div>
-          </div>
         </div>,
         document.body
       )}

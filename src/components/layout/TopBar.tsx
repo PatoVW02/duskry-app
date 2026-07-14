@@ -2,6 +2,8 @@ import { useLicenseStore } from '../../stores/useLicenseStore';
 import { billingPlansEnabled } from '../../lib/featureFlags';
 import { isToday, isYesterday, format } from 'date-fns';
 import { ChevronLeft, ChevronRight, Lock, Zap } from 'lucide-react';
+import { FocusProjectSelect } from '../tracking/FocusProjectSelect';
+import { TrackerHealth } from '../tracking/TrackerHealth';
 
 function dateNavLabel(date: Date): string {
   if (isToday(date)) return 'Today';
@@ -18,16 +20,29 @@ export interface DateNav {
   historyLocked?: boolean;
 }
 
-export function TopBar({ title, dateNav, onUpgrade }: { title: string; dateNav?: DateNav; onUpgrade?: () => void }) {
+export function TopBar({
+  title,
+  dateNav,
+  onUpgrade,
+  onOpenPermissions,
+}: {
+  title: string;
+  dateNav?: DateNav;
+  onUpgrade?: () => void;
+  onOpenPermissions: () => void;
+}) {
   const tier = useLicenseStore((s) => s.tier);
   const trialStartedAt = useLicenseStore((s) => s.trialStartedAt);
+  const verificationState = useLicenseStore((s) => s.verificationState);
   const days = useLicenseStore((s) => s.daysRemaining());
 
   const viewing = dateNav?.viewDate ?? new Date();
   const isTodayView = isToday(viewing);
   const historyLocked = dateNav?.historyLocked ?? false;
 
-  const showUpgradeBadge = billingPlansEnabled && (tier === 'free' || tier === 'expired');
+  const showUpgradeBadge = billingPlansEnabled
+    && verificationState !== 'loading'
+    && (tier === 'free' || tier === 'expired');
   const canStartFreeTrial = billingPlansEnabled && tier === 'free' && trialStartedAt <= 0;
 
   return (
@@ -53,6 +68,7 @@ export function TopBar({ title, dateNav, onUpgrade }: { title: string; dateNav?:
         {dateNav ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button
+              type="button"
               onClick={dateNav.onPrev}
               disabled={historyLocked}
               title={historyLocked ? 'Upgrade to view older history' : undefined}
@@ -67,6 +83,7 @@ export function TopBar({ title, dateNav, onUpgrade }: { title: string; dateNav?:
             </button>
             <span className="date-pill">{dateNavLabel(dateNav.viewDate)}</span>
             <button
+              type="button"
               onClick={dateNav.onNext}
               disabled={isTodayView}
               style={{
@@ -80,6 +97,7 @@ export function TopBar({ title, dateNav, onUpgrade }: { title: string; dateNav?:
             </button>
             {!isTodayView && (
               <button
+                type="button"
                 onClick={dateNav.onToday}
                 style={{
                   background: 'rgba(20,184,166,0.18)', border: '1px solid rgba(20,184,166,0.35)',
@@ -95,6 +113,8 @@ export function TopBar({ title, dateNav, onUpgrade }: { title: string; dateNav?:
       </div>
 
       <div data-tauri-drag-region style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <TrackerHealth compact onOpenPermissions={onOpenPermissions} />
+        <FocusProjectSelect compact />
         {billingPlansEnabled && tier === 'proTrial' && (
           <div className="trial-banner">
             <span>Pro trial - {days} day{days !== 1 ? 's' : ''} remaining</span>

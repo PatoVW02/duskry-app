@@ -105,61 +105,126 @@ fn assign_activity(
     activity_id: i64,
     project_id: i64,
 ) -> Result<Option<db::RuleSuggestion>, String> {
-    let previous = db::get_activity(activity_id).ok();
-    db::assign_activity(activity_id, project_id, "manual").map_err(|e| e.to_string())?;
-    let activity = db::get_activity(activity_id).map_err(|e| e.to_string())?;
+    Ok(assign_activities_internal(vec![activity_id], project_id)?
+        .into_iter()
+        .next())
+}
+
+#[tauri::command]
+fn assign_activities(
+    activity_ids: Vec<i64>,
+    project_id: i64,
+) -> Result<Vec<db::RuleSuggestion>, String> {
+    assign_activities_internal(activity_ids, project_id)
+}
+
+fn assign_activities_internal(
+    mut activity_ids: Vec<i64>,
+    project_id: i64,
+) -> Result<Vec<db::RuleSuggestion>, String> {
+    let mut seen = std::collections::HashSet::new();
+    activity_ids.retain(|activity_id| *activity_id > 0 && seen.insert(*activity_id));
+    if activity_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let previous: Vec<db::Activity> = activity_ids
+        .iter()
+        .map(|activity_id| db::get_activity(*activity_id).map_err(|error| error.to_string()))
+        .collect::<Result<_, _>>()?;
+    db::assign_activities(&activity_ids, project_id, "manual").map_err(|e| e.to_string())?;
+
+    let learned: Vec<db::Activity> = previous
+        .into_iter()
+        .filter(|activity| activity.project_id != Some(project_id))
+        .collect();
+    if !learned.is_empty() {
+        // Corrections must update existing learned-rule confidence even when
+        // new suggestions are disabled or the feature is not entitled.
+        db::record_assignment_learning_batch(&learned, project_id).map_err(|e| e.to_string())?;
+        refresh_learned_rules()?;
+    }
+
     let tier = license::get_effective_tier();
     let rule_suggestions_locked = feature_flags::billing_plans_enabled()
         && (tier == license::AppTier::Free || tier == license::AppTier::Expired);
     if rule_suggestions_locked {
-        return Ok(None);
-    }
-
-    let learned = previous.as_ref().and_then(|a| a.project_id) != Some(project_id);
-    if learned {
-        db::record_assignment_learning(&activity, project_id).map_err(|e| e.to_string())?;
+        return Ok(Vec::new());
     }
 
     let suggestions_enabled = db::get_setting("auto_rule_suggestions_enabled")
         .map(|v| v == "true")
         .unwrap_or(true);
-    if !suggestions_enabled {
-        return Ok(None);
-    }
-
-    if !learned {
-        return Ok(None);
-    }
-
-    let suggestion =
-        db::get_rule_suggestion_for_activity(activity_id, 3).map_err(|e| e.to_string())?;
     let auto_create = db::get_setting("auto_create_suggested_rules_enabled")
         .map(|v| v == "true")
         .unwrap_or(false);
-
-    if auto_create {
-        if let Some(s) = suggestion {
-            let value = suggested_rule_value(&s.field, &s.operator, &s.value);
-            let (field, operator) = suggested_rule_storage(&s.field, &s.operator);
-            let _ = db::create_rule(s.project_id, field, operator, &value, 10);
-            let _ = db::mark_rule_suggestion_created(s.project_id, &s.field, &s.operator, &s.value);
-        }
-        return Ok(None);
+    if !suggestions_enabled && !auto_create {
+        return Ok(Vec::new());
     }
 
-    Ok(suggestion)
+    if learned.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // A batch is one learning action: analyze it once using the most recent
+    // corrected activity as the representative signal. This avoids N complete
+    // evidence scans and, importantly, cannot return the same notice N times.
+    let representative_id = learned
+        .iter()
+        .max_by_key(|activity| activity.started_at)
+        .and_then(|activity| activity.id)
+        .ok_or_else(|| "Assigned activity has no ID.".to_string())?;
+    let suggestion = db::get_rule_suggestion_for_activity(representative_id, auto_create)
+        .map_err(|e| e.to_string())?;
+
+    if auto_create {
+        if let Some(mut s) = suggestion {
+            let value = suggested_rule_value(&s.field, &s.operator, &s.value);
+            let (field, operator) = suggested_rule_storage(&s.field, &s.operator);
+            rules::validate_rule(field, operator, &value)?;
+            let rule_id = db::create_rule_with_metadata(
+                s.project_id,
+                field,
+                operator,
+                &value,
+                db::RuleMetadata {
+                    priority: 0,
+                    source: "learned",
+                    enabled: true,
+                    confidence: Some(s.confidence),
+                    support_count: s.count,
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            db::mark_rule_suggestion_created(s.project_id, &s.field, &s.operator, &s.value)
+                .map_err(|e| e.to_string())?;
+            s.auto_created = true;
+            s.rule_id = Some(rule_id);
+            return Ok(vec![s]);
+        }
+        return Ok(Vec::new());
+    }
+
+    Ok(suggestion.into_iter().collect())
 }
 
 #[tauri::command]
 fn unassign_activity(activity_id: i64) -> Result<(), String> {
-    db::unassign_activity(activity_id).map_err(|e| e.to_string())
+    let previous = db::get_activity(activity_id).map_err(|e| e.to_string())?;
+    if previous.source.as_deref() == Some("learned_rule") {
+        pause_matching_learned_rules(&previous)?;
+    }
+    db::unassign_activity(activity_id).map_err(|e| e.to_string())?;
+    db::remove_assignment_learning(activity_id).map_err(|e| e.to_string())?;
+    refresh_learned_rules()
 }
 
 // ─── Activity mutations ─────────────────────────────────────────────────────
 
 #[tauri::command]
 fn delete_activity(activity_id: i64) -> Result<(), String> {
-    db::delete_activity(activity_id).map_err(|e| e.to_string())
+    db::delete_activity(activity_id).map_err(|e| e.to_string())?;
+    refresh_learned_rules()
 }
 
 #[tauri::command]
@@ -171,7 +236,8 @@ fn update_activity(
     ended_at: i64,
 ) -> Result<(), String> {
     db::update_activity(activity_id, &app_name, &window_title, started_at, ended_at)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    refresh_learned_rules()
 }
 
 #[tauri::command]
@@ -206,7 +272,29 @@ fn apply_rule_to_activities(rule_id: i64, from_ts: i64, to_ts: i64) -> Result<i3
         };
         if rules::rule_matches_one(rule, &window) {
             if let Some(id) = activity.id {
-                let _ = db::assign_activity(id, rule.project_id, "rule");
+                let learned = rule.source == "learned";
+                let source = if learned {
+                    "learned_rule"
+                } else {
+                    "manual_rule"
+                };
+                let confidence = rule.confidence.or((!learned).then_some(1.0));
+                let reason = format!(
+                    "retroactive {} rule{}",
+                    if learned { "learned" } else { "manual" },
+                    rule.id
+                        .map(|rule_id| format!(" #{rule_id}"))
+                        .unwrap_or_default()
+                );
+                db::assign_activity_with_decision(
+                    id,
+                    rule.project_id,
+                    source,
+                    rule.id,
+                    confidence,
+                    Some(&reason),
+                )
+                .map_err(|error| error.to_string())?;
                 count += 1;
             }
         }
@@ -240,11 +328,6 @@ fn create_project(app: tauri::AppHandle, name: String, color: String) -> Result<
         }
     }
     let id = db::create_project(&name, &color).map_err(|e| e.to_string())?;
-    // auto-create rules
-    let auto = rules::auto_rules_for_project(&name);
-    for (field, op, val) in auto {
-        let _ = db::create_rule(id, &field, &op, &val, 0);
-    }
     // keep tray in sync
     let _ = tray::rebuild_tray(&app);
     Ok(id)
@@ -259,6 +342,7 @@ fn delete_project(app: tauri::AppHandle, project_id: i64) -> Result<(), String> 
         db::set_setting("active_project_date", "").map_err(|e| e.to_string())?;
     }
     db::delete_project(project_id).map_err(|e| e.to_string())?;
+    refresh_learned_rules()?;
     let _ = tray::rebuild_tray(&app);
     Ok(())
 }
@@ -278,6 +362,13 @@ fn create_rule(
     value: String,
     priority: i32,
 ) -> Result<i64, String> {
+    let tier = license::get_effective_tier();
+    if feature_flags::billing_plans_enabled()
+        && (tier == license::AppTier::Free || tier == license::AppTier::Expired)
+    {
+        return Err("Upgrade to Pro to create rules.".to_string());
+    }
+    rules::validate_rule(&field, &operator, &value)?;
     db::create_rule(project_id, &field, &operator, &value, priority).map_err(|e| e.to_string())
 }
 
@@ -289,6 +380,11 @@ fn get_rules_for_project(project_id: i64) -> Result<Vec<db::Rule>, String> {
 #[tauri::command]
 fn delete_rule(rule_id: i64) -> Result<(), String> {
     db::delete_rule(rule_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_rule_enabled(rule_id: i64, enabled: bool) -> Result<(), String> {
+    db::set_rule_enabled(rule_id, enabled).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -307,12 +403,13 @@ fn create_suggested_rule(
 
     let compound_value = suggested_rule_value(&field, &operator, &value);
     let (stored_field, stored_operator) = suggested_rule_storage(&field, &operator);
+    rules::validate_rule(stored_field, stored_operator, &compound_value)?;
     let rule_id = db::create_rule(
         project_id,
         stored_field,
         stored_operator,
         &compound_value,
-        10,
+        0,
     )
     .map_err(|e| e.to_string())?;
     db::mark_rule_suggestion_created(project_id, &field, &operator, &value)
@@ -354,6 +451,91 @@ fn dismiss_rule_suggestion(
     db::dismiss_rule_suggestion(project_id, &field, &operator, &value).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn mark_rule_suggestion_prompted(
+    project_id: i64,
+    field: String,
+    operator: String,
+    value: String,
+) -> Result<(), String> {
+    db::mark_rule_suggestion_prompted(project_id, &field, &operator, &value)
+        .map_err(|e| e.to_string())
+}
+
+fn activity_window(activity: &db::Activity) -> tracker::ActiveWindow {
+    tracker::ActiveWindow {
+        app_name: activity.app_name.clone(),
+        window_title: activity.window_title.clone().unwrap_or_default(),
+        url: activity.domain.clone(),
+        file_path: activity.file_path.clone(),
+        timestamp: activity.started_at,
+    }
+}
+
+fn learning_event_window(event: &db::LearningEvent) -> tracker::ActiveWindow {
+    tracker::ActiveWindow {
+        app_name: event.app_name.clone(),
+        window_title: event.window_title.clone().unwrap_or_default(),
+        url: event.domain.clone(),
+        file_path: event.file_path.clone(),
+        timestamp: event.started_at,
+    }
+}
+
+fn pause_matching_learned_rules(activity: &db::Activity) -> Result<(), String> {
+    let Some(project_id) = activity.project_id else {
+        return Ok(());
+    };
+    let window = activity_window(activity);
+    for mut rule in db::get_all_rules().map_err(|e| e.to_string())? {
+        if rule.source != "learned" || rule.project_id != project_id {
+            continue;
+        }
+        rule.enabled = true;
+        if rules::rule_matches_one(&rule, &window) {
+            if let Some(rule_id) = rule.id {
+                db::set_rule_enabled(rule_id, false).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Recompute learned-rule precision from the corrected assignment history.
+/// Signals are derived rather than incremented, so moving A → B cannot leave
+/// stale positive evidence for A. Two or more meaningful corrections will
+/// normally take a 5-example learned rule below the 80% safety floor and pause it.
+fn refresh_learned_rules() -> Result<(), String> {
+    let events = db::get_learning_events().map_err(|e| e.to_string())?;
+    for mut rule in db::get_all_rules().map_err(|e| e.to_string())? {
+        if rule.source != "learned" {
+            continue;
+        }
+        rule.enabled = true;
+        let mut total = 0_i64;
+        let mut support = 0_i64;
+        for event in &events {
+            if rules::rule_matches_one(&rule, &learning_event_window(event)) {
+                total += 1;
+                if event.project_id == rule.project_id {
+                    support += 1;
+                }
+            }
+        }
+        let confidence = if total > 0 {
+            support as f64 / total as f64
+        } else {
+            0.0
+        };
+        let keep_enabled = support >= 3 && confidence >= 0.80;
+        if let Some(rule_id) = rule.id {
+            db::update_learned_rule_stats(rule_id, confidence, support, keep_enabled)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 // ─── Settings commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -366,6 +548,14 @@ fn set_setting(key: String, value: String) -> Result<(), String> {
     db::set_setting(&key, &value).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn set_rule_automation_mode(mode: String) -> Result<(), String> {
+    if !matches!(mode.as_str(), "off" | "suggest" | "automatic") {
+        return Err("Invalid rule automation mode.".to_string());
+    }
+    db::set_rule_automation_mode(&mode).map_err(|error| error.to_string())
+}
+
 // ─── License commands ───────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -374,9 +564,19 @@ fn get_license_tier() -> String {
 }
 
 #[tauri::command]
+fn get_license_status() -> license::LicenseStatus {
+    license::get_license_status()
+}
+
+#[tauri::command]
 async fn refresh_license_tier() -> Result<String, String> {
     let tier = license::refresh_license_online().await?;
     Ok(tier.as_str().to_string())
+}
+
+#[tauri::command]
+async fn refresh_license_status() -> license::LicenseStatus {
+    license::refresh_license_status().await
 }
 
 #[tauri::command]
@@ -417,7 +617,9 @@ fn start_trial(email: String) -> Result<i64, String> {
 
 #[tauri::command]
 fn cancel_trial() -> Result<(), String> {
-    db::set_setting("trial_status", "expired").map_err(|e| e.to_string())
+    // Cancelling the trial switches to the permanent Free plan. It should not
+    // route the user into the expired-trial paywall.
+    db::set_setting("trial_status", "downgraded").map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -638,6 +840,7 @@ pub fn run() {
             get_today_activities,
             get_activities_for_date,
             assign_activity,
+            assign_activities,
             unassign_activity,
             delete_activity,
             update_activity,
@@ -651,12 +854,17 @@ pub fn run() {
             create_rule,
             get_rules_for_project,
             delete_rule,
+            set_rule_enabled,
             create_suggested_rule,
             dismiss_rule_suggestion,
+            mark_rule_suggestion_prompted,
             get_setting,
             set_setting,
+            set_rule_automation_mode,
             get_license_tier,
+            get_license_status,
             refresh_license_tier,
+            refresh_license_status,
             validate_license,
             can_deactivate_license,
             remove_license,

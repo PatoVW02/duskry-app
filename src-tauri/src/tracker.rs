@@ -18,6 +18,7 @@ pub struct ActiveWindow {
 struct FrontWindowMetadata {
     app_name: String,
     raw_title: String,
+    document_url: Option<String>,
     document_path: Option<String>,
 }
 
@@ -380,15 +381,21 @@ fn tracking_worker_loop(generation: u64) {
 
             let window_changed = last
                 .as_ref()
-                .map(|w| w.app_name != current.app_name || w.window_title != current.window_title)
+                .map(|w| {
+                    w.app_name != current.app_name
+                        || w.window_title != current.window_title
+                        || w.file_path != current.file_path
+                })
                 .unwrap_or(true);
 
             // Browser tabs can navigate without changing the window title. Refresh
             // their URL every 15 seconds so domain rules and reports do not go stale.
             let should_refresh_url = window_changed || tick_count.is_multiple_of(3);
             if should_refresh_url {
-                current.url = get_browser_url(&current.app_name);
-                if current.url.is_none() && !window_changed {
+                let (url_observed, browser_url) = get_browser_url(&current.app_name);
+                if url_observed {
+                    current.url = browser_url;
+                } else if current.url.is_none() && !window_changed {
                     current.url = last.as_ref().and_then(|w| w.url.clone());
                 }
             } else if let Some(ref prev) = last {
@@ -465,11 +472,15 @@ fn tracking_worker_loop(generation: u64) {
                 ));
 
                 // start new activity
+                let normalized_domain = current
+                    .url
+                    .as_deref()
+                    .and_then(crate::rules::normalized_host);
                 match crate::db::save_activity_start(
                     &current.app_name,
                     &current.window_title,
                     current.file_path.as_deref(),
-                    current.url.as_deref(),
+                    normalized_domain.as_deref(),
                     now,
                 ) {
                     Ok(new_id) => {
@@ -484,12 +495,24 @@ fn tracking_worker_loop(generation: u64) {
 
                         // ── Auto-assign with focus-project priority ───
                         if let Ok(rules) = crate::db::get_all_rules() {
-                            if let Some(pid) = determine_project(&current, &rules) {
-                                let _ = crate::db::assign_activity(new_id, pid, "rule");
-                                crate::logger::tlog(&format!(
-                                    "  Auto-assigned #{} to project {}",
-                                    new_id, pid
-                                ));
+                            if let Some(decision) = determine_project(&current, &rules) {
+                                match crate::db::assign_activity_with_decision(
+                                    new_id,
+                                    decision.project_id,
+                                    decision.source,
+                                    decision.rule_id,
+                                    decision.confidence,
+                                    Some(&decision.reason),
+                                ) {
+                                    Ok(()) => crate::logger::tlog(&format!(
+                                        "  Auto-assigned #{} to project {} ({})",
+                                        new_id, decision.project_id, decision.reason
+                                    )),
+                                    Err(error) => crate::logger::tlog(&format!(
+                                        "  Failed to auto-assign #{}: {}",
+                                        new_id, error
+                                    )),
+                                }
                             }
                         }
 
@@ -532,7 +555,60 @@ pub fn get_current_window() -> Option<ActiveWindow> {
 ///       1. Focus project (always wins)
 ///
 /// When no focus project is set, normal full-rules matching applies.
-fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option<i64> {
+struct AssignmentDecision {
+    project_id: i64,
+    source: &'static str,
+    rule_id: Option<i64>,
+    confidence: Option<f64>,
+    reason: String,
+}
+
+fn focus_decision(project_id: i64) -> AssignmentDecision {
+    AssignmentDecision {
+        project_id,
+        source: "focus",
+        rule_id: None,
+        confidence: Some(1.0),
+        reason: "focus project".to_string(),
+    }
+}
+
+fn rule_decision(matched: crate::rules::RuleMatch) -> AssignmentDecision {
+    let learned = matched.source == "learned";
+    AssignmentDecision {
+        project_id: matched.project_id,
+        source: if learned {
+            "learned_rule"
+        } else {
+            "manual_rule"
+        },
+        rule_id: matched.rule_id,
+        confidence: matched.confidence.or((!learned).then_some(1.0)),
+        reason: if learned {
+            format!(
+                "learned rule{} at {:.0}% confidence",
+                matched
+                    .rule_id
+                    .map(|id| format!(" #{id}"))
+                    .unwrap_or_default(),
+                matched.confidence.unwrap_or(0.0) * 100.0
+            )
+        } else {
+            format!(
+                "manual rule{}",
+                matched
+                    .rule_id
+                    .map(|id| format!(" #{id}"))
+                    .unwrap_or_default()
+            )
+        },
+    }
+}
+
+fn determine_project(
+    window: &ActiveWindow,
+    rules: &[crate::db::Rule],
+) -> Option<AssignmentDecision> {
     let tier = crate::license::get_effective_tier();
     let rules_locked = crate::feature_flags::billing_plans_enabled()
         && (tier == crate::license::AppTier::Free || tier == crate::license::AppTier::Expired);
@@ -542,7 +618,7 @@ fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option
     if active_pid > 0 {
         // Free/Expired: rules don't apply, focus project always wins
         if rules_locked {
-            return Some(active_pid);
+            return Some(focus_decision(active_pid));
         }
         let rules_override = crate::db::get_setting("rules_override_active_project")
             .map(|v| v == "true")
@@ -550,18 +626,18 @@ fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option
 
         if rules_override {
             // App/URL rules beat the focus project
-            if let Some(pid) = crate::rules::apply_app_url_rules(window, rules) {
-                return Some(pid);
+            if let Some(matched) = crate::rules::apply_app_url_rules(window, rules) {
+                return Some(rule_decision(matched));
             }
         }
-        return Some(active_pid);
+        return Some(focus_decision(active_pid));
     }
 
     // No focus project → rules normally (skipped on free/expired)
     if rules_locked {
         return None;
     }
-    crate::rules::apply_rules(window, rules)
+    crate::rules::apply_rules(window, rules).map(rule_decision)
 }
 
 /// Run an osascript snippet with a hard timeout.
@@ -613,6 +689,7 @@ pub fn get_active_window() -> Option<ActiveWindow> {
     let app_name = metadata.app_name;
     let raw_title = metadata.raw_title;
     let file_path = metadata.document_path;
+    let document_url = metadata.document_url;
     // URL is NOT fetched here — it is fetched by the tracking loop only when
     // the window changes, keeping the hot-path osascript calls to one per tick.
     let window_title = get_browser_title(&app_name)
@@ -622,7 +699,7 @@ pub fn get_active_window() -> Option<ActiveWindow> {
     Some(ActiveWindow {
         app_name,
         window_title,
-        url: None,
+        url: document_url,
         file_path,
         timestamp: Utc::now().timestamp(),
     })
@@ -664,32 +741,50 @@ end tell
         return None;
     }
     let raw_title = parts.get(1).unwrap_or(&"").trim().to_string();
-    let document_path = normalize_ax_document(parts.get(2).copied().unwrap_or(""));
+    let (document_url, document_path) = classify_ax_document(parts.get(2).copied().unwrap_or(""));
 
     Some(FrontWindowMetadata {
         app_name,
         raw_title,
+        document_url,
         document_path,
     })
 }
 
 #[cfg(target_os = "macos")]
-fn normalize_ax_document(value: &str) -> Option<String> {
+fn classify_ax_document(value: &str) -> (Option<String>, Option<String>) {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return None;
+        return (None, None);
     }
-    trimmed
-        .strip_prefix("file://")
-        .map(|raw| raw.replace("%20", " "))
-        .or_else(|| Some(trimmed.to_string()))
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        return (crate::rules::normalized_host(trimmed), None);
+    }
+    if lower.starts_with("file://") {
+        let path = url::Url::parse(trimmed)
+            .ok()
+            .and_then(|document| document.to_file_path().ok())
+            .map(|path| path.to_string_lossy().into_owned());
+        return (None, path);
+    }
+    if std::path::Path::new(trimmed).is_absolute() {
+        return (None, Some(trimmed.to_string()));
+    }
+    // AXDocument can expose custom deep links (for example vscode://) whose
+    // query may contain private state. Unknown URIs and relative strings are
+    // not file paths and must not enter activity or learning storage.
+    (None, None)
 }
 
 #[cfg(target_os = "macos")]
 fn get_browser_title(app_name: &str) -> Option<String> {
     let script = match app_name {
-        "Google Chrome" | "Chromium" => {
+        "Google Chrome" => {
             r#"tell application "Google Chrome" to return title of active tab of front window"#
+        }
+        "Chromium" => {
+            r#"tell application "Chromium" to return title of active tab of front window"#
         }
         "Safari" => r#"tell application "Safari" to return name of current tab of front window"#,
         "Microsoft Edge" => {
@@ -710,11 +805,12 @@ fn get_browser_title(app_name: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn get_browser_url(app_name: &str) -> Option<String> {
+fn get_browser_url(app_name: &str) -> (bool, Option<String>) {
     let script = match app_name {
-        "Google Chrome" | "Chromium" => {
+        "Google Chrome" => {
             r#"tell application "Google Chrome" to return URL of active tab of front window"#
         }
+        "Chromium" => r#"tell application "Chromium" to return URL of active tab of front window"#,
         "Safari" => r#"tell application "Safari" to return URL of current tab of front window"#,
         "Microsoft Edge" => {
             r#"tell application "Microsoft Edge" to return URL of active tab of front window"#
@@ -727,9 +823,12 @@ fn get_browser_url(app_name: &str) -> Option<String> {
             r#"tell application "Atlas" to return URL of active tab of front window"#
         }
         "Orion" => r#"tell application "Orion" to return URL of active tab of front window"#,
-        _ => return None,
+        _ => return (false, None),
     };
-    run_osascript(script, Duration::from_secs(2))
+    match run_osascript(script, Duration::from_secs(2)) {
+        Some(raw_url) => (true, crate::rules::normalized_host(&raw_url)),
+        None => (false, None),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -781,8 +880,8 @@ pub fn get_active_window() -> Option<ActiveWindow> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn get_browser_url(_app_name: &str) -> Option<String> {
-    None
+fn get_browser_url(_app_name: &str) -> (bool, Option<String>) {
+    (false, None)
 }
 
 /// Reads raw HIDIdleTime from ioreg and returns seconds. Only called from the background watcher thread.
@@ -927,4 +1026,33 @@ fn is_engaged() -> bool {
 #[cfg(not(target_os = "macos"))]
 fn is_engaged() -> bool {
     false
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::classify_ax_document;
+
+    #[test]
+    fn ax_document_separates_websites_from_local_paths() {
+        let (url, path) = classify_ax_document("https://docs.example.com/private?token=secret");
+        assert_eq!(url.as_deref(), Some("docs.example.com"));
+        assert_eq!(path, None);
+
+        let (url, path) = classify_ax_document("file:///Users/test/My%20File.txt");
+        assert_eq!(url, None);
+        assert_eq!(path.as_deref(), Some("/Users/test/My File.txt"));
+    }
+
+    #[test]
+    fn ax_document_rejects_custom_uris_and_relative_values() {
+        assert_eq!(
+            classify_ax_document("vscode://private/resource?token=secret"),
+            (None, None)
+        );
+        assert_eq!(classify_ax_document("not/a/local/path"), (None, None));
+        assert_eq!(
+            classify_ax_document("/Users/test/project/file.rs"),
+            (None, Some("/Users/test/project/file.rs".to_string()))
+        );
+    }
 }

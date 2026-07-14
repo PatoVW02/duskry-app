@@ -15,10 +15,9 @@ export function Tracking({ onUpgrade }: { onUpgrade?: () => void }) {
   const {
     rulesOverrideActive,
     setRulesOverrideActive,
-    autoRuleSuggestionsEnabled,
-    setAutoRuleSuggestionsEnabled,
-    autoCreateSuggestedRulesEnabled,
-    setAutoCreateSuggestedRulesEnabled,
+    ruleAutomationMode,
+    ruleAutomationSaving,
+    setRuleAutomationMode,
     idleThresholdSecs,
     setIdleThreshold,
   } = useSettingsStore();
@@ -47,6 +46,7 @@ export function Tracking({ onUpgrade }: { onUpgrade?: () => void }) {
           </div>
         </div>
         <select
+          aria-label="Idle timeout"
           value={idleThresholdSecs}
           onChange={(e) => setIdleThreshold(Number(e.target.value))}
           style={{
@@ -114,69 +114,80 @@ export function Tracking({ onUpgrade }: { onUpgrade?: () => void }) {
         </div>
         <button
           role="switch"
+          aria-label="Allow app and website rules to override the focus project"
           aria-checked={rulesOverrideActive}
           onClick={() => setRulesOverrideActive(!rulesOverrideActive)}
           className={`toggle-switch${rulesOverrideActive ? ' on' : ''}`}
         />
       </div>
 
-      {/* Auto rule suggestions */}
-      <div style={{
-        display: 'flex', alignItems: 'flex-start', gap: 16,
-        paddingBottom: 16,
-        borderBottom: '0.5px solid rgba(255,255,255,0.07)',
-        marginBottom: 16,
-      }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
-            Suggest rules from assignments
-          </div>
-          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
-            When enabled, Duskry learns from repeated manual project assignments
-            and asks before creating a matching app or domain rule after at least 3 matches.
-          </div>
-          {ruleSuggestionsLocked && <UpgradeNotice onUpgrade={onUpgrade} />}
-        </div>
-        <button
-          role="switch"
-          aria-checked={!ruleSuggestionsLocked && autoRuleSuggestionsEnabled}
-          aria-disabled={ruleSuggestionsLocked}
-          disabled={ruleSuggestionsLocked}
-          onClick={() => {
-            if (!ruleSuggestionsLocked) setAutoRuleSuggestionsEnabled(!autoRuleSuggestionsEnabled);
-          }}
-          className={`toggle-switch${!ruleSuggestionsLocked && autoRuleSuggestionsEnabled ? ' on' : ''}`}
-          title={ruleSuggestionsLocked ? 'Upgrade to Pro to use rule suggestions' : undefined}
-          style={ruleSuggestionsLocked ? { opacity: 0.42, cursor: 'not-allowed' } : undefined}
-        />
-      </div>
-
-      {/* Auto-create suggested rules */}
+      {/* Smart rule automation */}
       <div style={{
         display: 'flex', alignItems: 'flex-start', gap: 16,
       }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
-            Auto-create suggested rules
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>Smart rules</span>
+            <span style={{
+              fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.05em',
+              color: 'rgba(45,212,191,0.70)', border: '0.5px solid rgba(45,212,191,0.20)',
+              background: 'rgba(45,212,191,0.07)', borderRadius: 999, padding: '2px 7px',
+            }}>
+              Local
+            </span>
           </div>
           <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
-            When enabled, matching app or domain rules are created automatically
-            once repeated assignments reach the suggestion threshold and the rule is specific enough.
+            Duskry learns from your corrections and compares competing projects before acting.
+            Window titles, websites, and file paths never leave this device.
           </div>
+          {!ruleSuggestionsLocked && (
+            <div style={{ fontSize: 11, color: 'rgba(45,212,191,0.62)', marginTop: 6, lineHeight: 1.5 }}>
+              {ruleAutomationMode === 'off'
+                ? 'Suggestions and creation are paused; corrections still keep existing rules safe.'
+                : ruleAutomationMode === 'suggest'
+                  ? 'Duskry will ask before using a pattern.'
+                  : 'Only 90%+ patterns seen across multiple days are applied automatically.'}
+            </div>
+          )}
           {ruleSuggestionsLocked && <UpgradeNotice onUpgrade={onUpgrade} />}
         </div>
-        <button
-          role="switch"
-          aria-checked={!ruleSuggestionsLocked && autoCreateSuggestedRulesEnabled}
-          aria-disabled={ruleSuggestionsLocked}
-          disabled={ruleSuggestionsLocked}
-          onClick={() => {
-            if (!ruleSuggestionsLocked) setAutoCreateSuggestedRulesEnabled(!autoCreateSuggestedRulesEnabled);
+        <div
+          role="group"
+          aria-label="Smart rule automation mode"
+          style={{
+            display: 'flex', gap: 2, padding: 3, flexShrink: 0,
+            borderRadius: 8, background: 'rgba(255,255,255,0.045)',
+            border: '0.5px solid rgba(255,255,255,0.09)',
+            opacity: ruleSuggestionsLocked || ruleAutomationSaving ? 0.42 : 1,
           }}
-          className={`toggle-switch${!ruleSuggestionsLocked && autoCreateSuggestedRulesEnabled ? ' on' : ''}`}
-          title={ruleSuggestionsLocked ? 'Upgrade to Pro to auto-create suggested rules' : undefined}
-          style={ruleSuggestionsLocked ? { opacity: 0.42, cursor: 'not-allowed' } : undefined}
-        />
+        >
+          {([
+            ['off', 'Off'],
+            ['suggest', 'Ask me'],
+            ['automatic', 'Autopilot'],
+          ] as const).map(([mode, label]) => {
+            const selected = !ruleSuggestionsLocked && ruleAutomationMode === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={selected}
+                disabled={ruleSuggestionsLocked || ruleAutomationSaving}
+                onClick={() => void setRuleAutomationMode(mode).catch(() => {})}
+                style={{
+                  border: 'none', borderRadius: 6, padding: '5px 9px',
+                  background: selected ? 'rgba(45,212,191,0.14)' : 'transparent',
+                  color: selected ? 'rgba(94,234,212,0.92)' : 'rgba(255,255,255,0.40)',
+                  fontSize: 11, fontWeight: selected ? 600 : 500,
+                  fontFamily: 'Inter, sans-serif', cursor: ruleSuggestionsLocked || ruleAutomationSaving ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

@@ -1,14 +1,12 @@
 import { useState, useEffect } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
-import { LayoutDashboard, FolderOpen, BarChart2, Settings, List } from 'lucide-react';
+import { BarChart3, CalendarDays, FolderOpen, ListChecks, Settings, WandSparkles } from 'lucide-react';
 import logo from '../../assets/logo.png';
 import { useProjectStore } from '../../stores/useProjectStore';
-import { useActivityStore } from '../../stores/useActivityStore';
-import { formatDuration } from '../../lib/utils';
 // dragState window events ('duskry-drag-start', 'duskry-drag-end', 'duskry-drag-hover')
 // are used in useEffect below to drive isDragging / dragOver state.
 
-type Page = 'overview' | 'activity' | 'projects' | 'reports' | 'settings';
+type Page = 'today' | 'review' | 'projects' | 'rules' | 'reports' | 'settings';
 
 interface Props {
   activePage: Page;
@@ -16,16 +14,16 @@ interface Props {
 }
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'overview',  label: 'Overview',  icon: <LayoutDashboard size={14} /> },
-  { id: 'activity',  label: 'Activity',  icon: <List size={14} /> },
+  { id: 'today',     label: 'Today',     icon: <CalendarDays size={14} /> },
+  { id: 'review',    label: 'Review',    icon: <ListChecks size={14} /> },
   { id: 'projects',  label: 'Projects',  icon: <FolderOpen size={14} /> },
-  { id: 'reports',   label: 'Reports',   icon: <BarChart2 size={14} /> },
+  { id: 'rules',     label: 'Rules',     icon: <WandSparkles size={14} /> },
+  { id: 'reports',   label: 'Reports',   icon: <BarChart3 size={14} /> },
   { id: 'settings',  label: 'Settings',  icon: <Settings size={14} /> },
 ];
 
 export function Sidebar({ activePage, onNavigate }: Props) {
   const projects    = useProjectStore((s) => s.projects);
-  const activities  = useActivityStore((s) => s.activities);
   const [dragOver,      setDragOver]      = useState<number | null>(null);
   const [isDragging,    setIsDragging]    = useState(false);
   const [appVersion,    setAppVersion]    = useState<string>('');
@@ -47,13 +45,6 @@ export function Sidebar({ activePage, onNavigate }: Props) {
     };
   }, []);
 
-  // Per-project seconds from today's activities
-  const projectSecs = new Map<number, number>();
-  for (const a of activities) {
-    if (a.project_id && a.duration_s)
-      projectSecs.set(a.project_id, (projectSecs.get(a.project_id) ?? 0) + a.duration_s);
-  }
-
   // dropProps no longer needed — hover is tracked via duskry-drag-hover window event
   // The data-drop-project-id attribute is used by ActivityPage's elementFromPoint check
 
@@ -68,23 +59,25 @@ export function Sidebar({ activePage, onNavigate }: Props) {
         {NAV_ITEMS.map((item) => (
           <button
             key={item.id}
+            type="button"
             className={`nav-item ${activePage === item.id ? 'active' : ''}`}
             onClick={() => onNavigate(item.id)}
+            aria-current={activePage === item.id ? 'page' : undefined}
           >
             {item.icon}
             {item.label}
           </button>
         ))}
 
-        {projects.length > 0 && (
+        {isDragging && projects.length > 0 && (
           <>
-            <div className="nav-section-label">Projects</div>
+            <div className="nav-section-label">Assign to</div>
             {projects.slice(0, 8).map((p) => {
-              const secs   = projectSecs.get(p.id) ?? 0;
               const isOver = dragOver === p.id;
               return (
                 <button
                   key={p.id}
+                  type="button"
                   className="nav-item"
                   data-drop-project-id={p.id}
                   onClick={() => onNavigate('projects')}
@@ -92,16 +85,10 @@ export function Sidebar({ activePage, onNavigate }: Props) {
                     // drag-over: strong colored fill + bright border
                     // dragging (not over): subtle pulsing target indicator
                     // idle: no override (CSS handles normal hover)
-                    background: isOver
-                      ? `${p.color}30`
-                      : isDragging
-                        ? 'rgba(255,255,255,0.04)'
-                        : undefined,
+                    background: isOver ? `${p.color}30` : 'rgba(255,255,255,0.04)',
                     border: isOver
                       ? `1px solid ${p.color}90`
-                      : isDragging
-                        ? '1px dashed rgba(255,255,255,0.18)'
-                        : '1px solid transparent',
+                      : '1px dashed rgba(255,255,255,0.18)',
                     boxShadow: isOver ? `0 0 0 3px ${p.color}22` : undefined,
                     transform: isOver ? 'scale(1.01)' : undefined,
                     transition: 'background 0.1s, border 0.1s, box-shadow 0.1s, transform 0.08s',
@@ -122,17 +109,6 @@ export function Sidebar({ activePage, onNavigate }: Props) {
                   }}>
                     {p.name}
                   </span>
-                  {secs > 0 && (
-                    <span style={{
-                      fontSize: 9.5, fontVariantNumeric: 'tabular-nums',
-                      color: 'rgba(255,255,255,0.35)',
-                      background: 'rgba(255,255,255,0.07)',
-                      padding: '1px 5px', borderRadius: 3,
-                      flexShrink: 0,
-                    }}>
-                      {formatDuration(secs)}
-                    </span>
-                  )}
                 </button>
               );
             })}

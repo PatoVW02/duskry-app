@@ -1,150 +1,324 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type AriaAttributes,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown } from 'lucide-react';
+import { Check, ChevronDown } from 'lucide-react';
+import { findTypeaheadMatch, getNextEnabledIndex } from './selectNavigation';
+import './ui.css';
 
 export interface SelectOption {
   value: string;
   label: string;
+  disabled?: boolean;
 }
 
-interface SelectProps {
+export interface SelectProps {
   value: string;
   onChange: (value: string) => void;
   options: SelectOption[];
   placeholder?: string;
-  style?: React.CSSProperties;
+  id?: string;
+  name?: string;
+  className?: string;
+  style?: CSSProperties;
+  disabled?: boolean;
+  required?: boolean;
+  invalid?: boolean;
+  'aria-label'?: AriaAttributes['aria-label'];
+  'aria-labelledby'?: AriaAttributes['aria-labelledby'];
+  'aria-describedby'?: AriaAttributes['aria-describedby'];
+  'aria-invalid'?: AriaAttributes['aria-invalid'];
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function Select({ value, onChange, options, placeholder = 'Select…', style }: SelectProps) {
-  const [open, setOpen] = useState(false);
+interface DropdownPosition {
+  top: number;
+  left: number;
+  width: number;
+  maxHeight: number;
+}
+
+const TYPEAHEAD_RESET_MS = 650;
+const MENU_GAP = 6;
+const VIEWPORT_MARGIN = 10;
+
+export function Select({
+  value,
+  onChange,
+  options,
+  placeholder = 'Select…',
+  id,
+  name,
+  className,
+  style,
+  disabled = false,
+  required = false,
+  invalid = false,
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
+  'aria-describedby': ariaDescribedBy,
+  'aria-invalid': ariaInvalid,
+  onOpenChange,
+}: SelectProps) {
+  const generatedId = useId();
+  const triggerId = id ?? `duskry-select-${generatedId}`;
+  const listboxId = `${triggerId}-listbox`;
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const [dropPos, setDropPos] = useState<{ top: number; left: number; width: number }>({
-    top: 0, left: 0, width: 0,
+  const listboxRef = useRef<HTMLDivElement>(null);
+  const typeaheadRef = useRef('');
+  const typeaheadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [dropPos, setDropPos] = useState<DropdownPosition>({
+    top: 0,
+    left: 0,
+    width: 0,
+    maxHeight: 280,
   });
 
-  const selected = options.find((o) => o.value === value);
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const selected = selectedIndex >= 0 ? options[selectedIndex] : undefined;
 
-  const openDropdown = useCallback(() => {
-    if (triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      setDropPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+  const notifyOpenChange = useCallback((nextOpen: boolean) => {
+    setOpen(nextOpen);
+    onOpenChange?.(nextOpen);
+  }, [onOpenChange]);
+
+  const updateDropPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const roomBelow = window.innerHeight - rect.bottom - VIEWPORT_MARGIN;
+    const roomAbove = rect.top - VIEWPORT_MARGIN;
+    const preferredHeight = Math.min(280, Math.max(44, options.length * 40 + 8));
+    const openAbove = roomBelow < Math.min(preferredHeight, 160) && roomAbove > roomBelow;
+    const maxHeight = Math.max(80, Math.min(preferredHeight, openAbove ? roomAbove - MENU_GAP : roomBelow - MENU_GAP));
+    const top = openAbove
+      ? Math.max(VIEWPORT_MARGIN, rect.top - maxHeight - MENU_GAP)
+      : rect.bottom + MENU_GAP;
+
+    setDropPos({
+      top,
+      left: Math.min(rect.left, Math.max(VIEWPORT_MARGIN, window.innerWidth - Math.max(rect.width, 150) - VIEWPORT_MARGIN)),
+      width: rect.width,
+      maxHeight,
+    });
+  }, [options.length]);
+
+  const openDropdown = useCallback((preferredIndex?: number) => {
+    if (disabled) return;
+    updateDropPosition();
+    const initialIndex = preferredIndex ?? (
+      selectedIndex >= 0 && !options[selectedIndex]?.disabled
+        ? selectedIndex
+        : getNextEnabledIndex(options, -1, 1)
+    );
+    setActiveIndex(initialIndex);
+    notifyOpenChange(true);
+  }, [disabled, notifyOpenChange, options, selectedIndex, updateDropPosition]);
+
+  const closeDropdown = useCallback((restoreFocus = false) => {
+    notifyOpenChange(false);
+    setActiveIndex(-1);
+    typeaheadRef.current = '';
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
     }
-    setOpen(true);
-  }, []);
+  }, [notifyOpenChange]);
+
+  const selectIndex = useCallback((index: number) => {
+    const option = options[index];
+    if (!option || option.disabled) return;
+    if (option.value !== value) onChange(option.value);
+    closeDropdown(true);
+  }, [closeDropdown, onChange, options, value]);
+
+  const handleTypeahead = useCallback((key: string) => {
+    if (typeaheadTimerRef.current) clearTimeout(typeaheadTimerRef.current);
+    typeaheadRef.current += key.toLocaleLowerCase();
+    const match = findTypeaheadMatch(options, typeaheadRef.current, activeIndex >= 0 ? activeIndex : selectedIndex);
+    if (match >= 0) {
+      if (!open) openDropdown(match);
+      else setActiveIndex(match);
+    }
+    typeaheadTimerRef.current = setTimeout(() => {
+      typeaheadRef.current = '';
+      typeaheadTimerRef.current = null;
+    }, TYPEAHEAD_RESET_MS);
+  }, [activeIndex, open, openDropdown, options, selectedIndex]);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return;
+
+    if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey && !/\s/.test(event.key)) {
+      event.preventDefault();
+      handleTypeahead(event.key);
+      return;
+    }
+
+    switch (event.key) {
+      case 'ArrowDown': {
+        event.preventDefault();
+        const next = getNextEnabledIndex(options, open ? activeIndex : selectedIndex, 1);
+        if (!open) openDropdown(next);
+        else setActiveIndex(next);
+        break;
+      }
+      case 'ArrowUp': {
+        event.preventDefault();
+        const next = getNextEnabledIndex(options, open ? activeIndex : selectedIndex, -1);
+        if (!open) openDropdown(next);
+        else setActiveIndex(next);
+        break;
+      }
+      case 'Home':
+        if (open) {
+          event.preventDefault();
+          setActiveIndex(getNextEnabledIndex(options, -1, 1));
+        }
+        break;
+      case 'End':
+        if (open) {
+          event.preventDefault();
+          setActiveIndex(getNextEnabledIndex(options, 0, -1));
+        }
+        break;
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        if (open && activeIndex >= 0) selectIndex(activeIndex);
+        else openDropdown();
+        break;
+      case 'Escape':
+        if (open) {
+          event.preventDefault();
+          event.stopPropagation();
+          closeDropdown(true);
+        }
+        break;
+      case 'Tab':
+        if (open) closeDropdown(false);
+        break;
+      default:
+        break;
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
-    const onKey  = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    const onDown = () => setOpen(false);
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('mousedown', onDown);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onDown);
-    };
-  }, [open]);
 
-  const handleSelect = (val: string) => {
-    onChange(val);
-    setOpen(false);
-  };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || listboxRef.current?.contains(target)) return;
+      closeDropdown(false);
+    };
+    const handleViewportChange = () => updateDropPosition();
+
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
+    };
+  }, [closeDropdown, open, updateDropPosition]);
+
+  useEffect(() => () => {
+    if (typeaheadTimerRef.current) clearTimeout(typeaheadTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (disabled && open) closeDropdown(false);
+  }, [closeDropdown, disabled, open]);
+
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    document.getElementById(`${listboxId}-option-${activeIndex}`)?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex, listboxId, open]);
+
+  const activeOptionId = open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
 
   return (
     <>
+      {name && <input type="hidden" name={name} value={value} />}
       <button
         ref={triggerRef}
+        id={triggerId}
         type="button"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => (open ? setOpen(false) : openDropdown())}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 5,
-          background: 'rgba(255, 255, 255, 0.07)',
-          border: `0.5px solid ${open ? 'rgba(45, 212, 191, 0.50)' : 'rgba(255, 255, 255, 0.15)'}`,
-          borderRadius: 8,
-          padding: '7px 10px',
-          color: selected ? 'rgba(255, 255, 255, 0.88)' : 'rgba(255, 255, 255, 0.38)',
-          fontSize: 12,
-          fontFamily: 'Inter, sans-serif',
-          cursor: 'pointer',
-          flex: '1 1 auto',
-          minWidth: 90,
-          outline: 'none',
-          transition: 'border-color 0.15s',
-          ...style,
-        }}
+        role="combobox"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-controls={open ? listboxId : undefined}
+        aria-activedescendant={activeOptionId}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabel ? undefined : ariaLabelledBy}
+        aria-describedby={ariaDescribedBy}
+        aria-required={required || undefined}
+        aria-invalid={ariaInvalid ?? (invalid || undefined)}
+        disabled={disabled}
+        className={`duskry-ui-select-trigger${open ? ' is-open' : ''}${className ? ` ${className}` : ''}`}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={() => (open ? closeDropdown(false) : openDropdown())}
+        onKeyDown={handleKeyDown}
+        style={style}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
+        <span className={`duskry-ui-select-value${selected ? '' : ' is-placeholder'}`}>
           {selected ? selected.label : placeholder}
         </span>
-        <ChevronDown
-          size={11}
-          style={{
-            flexShrink: 0,
-            opacity: 0.45,
-            transform: open ? 'rotate(180deg)' : 'none',
-            transition: 'transform 0.15s',
-          }}
-        />
+        <ChevronDown className="duskry-ui-select-chevron" size={14} aria-hidden="true" />
       </button>
 
-      {open && createPortal(
+      {open && typeof document !== 'undefined' && createPortal(
         <div
+          ref={listboxRef}
+          id={listboxId}
+          role="listbox"
+          aria-labelledby={ariaLabel ? undefined : (ariaLabelledBy ?? triggerId)}
+          aria-label={ariaLabel}
+          className="duskry-ui-select-listbox"
           style={{
-            position: 'fixed',
             top: dropPos.top,
             left: dropPos.left,
-            width: Math.max(dropPos.width, 130),
-            zIndex: 9999,
-            background: 'rgba(10, 20, 16, 0.96)',
-            backdropFilter: 'blur(24px)',
-            WebkitBackdropFilter: 'blur(24px)',
-            border: '0.5px solid rgba(255, 255, 255, 0.13)',
-            borderRadius: 10,
-            boxShadow: '0 16px 40px rgba(0,0,0,0.55)',
-            padding: '4px 0',
-            overflow: 'hidden',
+            width: Math.max(dropPos.width, 150),
+            maxHeight: dropPos.maxHeight,
           }}
-          onMouseDown={(e) => e.stopPropagation()}
+          onMouseDown={(event) => event.preventDefault()}
         >
-          {options.map((opt) => {
-            const isActive = opt.value === value;
+          {options.length === 0 && (
+            <div className="duskry-ui-select-empty">No options</div>
+          )}
+          {options.map((option, index) => {
+            const isSelected = option.value === value;
+            const isActive = index === activeIndex;
             return (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => handleSelect(opt.value)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  background: isActive ? 'rgba(45, 212, 191, 0.12)' : 'transparent',
-                  border: 'none',
-                  padding: '7px 12px',
-                  fontSize: 12,
-                  fontFamily: 'Inter, sans-serif',
-                  color: isActive ? 'rgba(45, 212, 191, 0.90)' : 'rgba(255, 255, 255, 0.80)',
-                  cursor: 'pointer',
+              <div
+                key={option.value}
+                id={`${listboxId}-option-${index}`}
+                role="option"
+                aria-selected={isSelected}
+                aria-disabled={option.disabled || undefined}
+                className={`duskry-ui-select-option${isSelected ? ' is-selected' : ''}${isActive ? ' is-active' : ''}${option.disabled ? ' is-disabled' : ''}`}
+                onMouseMove={() => {
+                  if (!option.disabled && activeIndex !== index) setActiveIndex(index);
                 }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = isActive
-                    ? 'rgba(45, 212, 191, 0.18)'
-                    : 'rgba(255, 255, 255, 0.07)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = isActive
-                    ? 'rgba(45, 212, 191, 0.12)'
-                    : 'transparent';
-                }}
+                onClick={() => selectIndex(index)}
               >
-                {opt.label}
-              </button>
+                <span>{option.label}</span>
+                {isSelected && <Check size={14} aria-hidden="true" />}
+              </div>
             );
           })}
         </div>,
-        document.body
+        document.body,
       )}
     </>
   );

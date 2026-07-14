@@ -15,8 +15,20 @@ html, body, #root {
 }
 
 html, body, #root, #root * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button,
+.sidebar,
+[data-tauri-drag-region] {
   user-select: none;
   -webkit-user-select: none;
+}
+
+:where(button, a, input, select, textarea, [role='button'], [tabindex]):focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.92);
+  outline-offset: 2px;
 }
 
 .logs-card, .logs-card * {
@@ -99,7 +111,7 @@ html, body, #root, #root * {
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: rgba(4, 10, 16, 0.55);
+  background: rgba(4, 10, 16, 0.48);
 }
 
 .app-content {
@@ -112,7 +124,7 @@ html, body, #root, #root * {
 
 /* ── Sidebar ─────────────────────────────────────────── */
 .sidebar {
-  width: 200px;
+  width: 184px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -127,13 +139,13 @@ html, body, #root, #root * {
   font-weight: 600;
   color: rgba(255, 255, 255, 0.90);
   letter-spacing: -0.3px;
-  padding: 20px 16px 12px;
+  padding: 20px 15px 15px;
   padding-top: 44px;
 }
 
 .sidebar-nav {
   flex: 1;
-  padding: 4px 8px;
+  padding: 4px 9px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -143,6 +155,7 @@ html, body, #root, #root * {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 34px;
   padding: 7px 10px;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.50);
@@ -161,8 +174,12 @@ html, body, #root, #root * {
   color: rgba(255, 255, 255, 0.80);
 }
 .nav-item.active {
-  background: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.085);
   color: rgba(255, 255, 255, 0.95);
+}
+
+.nav-item.active svg {
+  color: rgba(94, 234, 212, 0.9);
 }
 
 .nav-section-label {

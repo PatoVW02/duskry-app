@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useLicenseStore, type SelectedPlan } from '../../stores/useLicenseStore';
+import {
+  useLicenseStore,
+  type EntitlementVerificationState,
+  type SelectedPlan,
+} from '../../stores/useLicenseStore';
 import { format, fromUnixTime } from 'date-fns';
-import { Check, ExternalLink } from 'lucide-react';
+import { Check, Crown, ExternalLink } from 'lucide-react';
 import { openCheckout, openAnnualCheckout } from '../../lib/checkout';
 import { usePricesStore } from '../../stores/usePricesStore';
 import { errorMessage } from '../../lib/utils';
@@ -24,6 +28,7 @@ const PLAN_LABEL: Record<SelectedPlan, string> = {
 const TRIAL_DURATION_DAYS = 7;
 
 type CellVal = string | boolean;
+type CheckoutSelection = { plan: 'pro' | 'proPlus'; period: 'monthly' | 'yearly' };
 const COMPARISON_ROWS: { label: string; free: CellVal; pro: CellVal; proPlus: CellVal }[] = [
   { label: 'Projects',         free: '3',       pro: 'Unlimited', proPlus: 'Unlimited' },
   { label: 'Activity history', free: '7 days',  pro: '90 days',   proPlus: 'Unlimited' },
@@ -48,6 +53,10 @@ export function Billing() {
   const setSelectedPlan = useLicenseStore((s) => s.setSelectedPlan);
   const fetchTier = useLicenseStore((s) => s.fetchTier);
   const refreshing = useLicenseStore((s) => s.refreshing);
+  const verificationState = useLicenseStore((s) => s.verificationState);
+  const lastVerifiedAt = useLicenseStore((s) => s.lastVerifiedAt);
+  const offlineGraceUntil = useLicenseStore((s) => s.offlineGraceUntil);
+  const verificationMessage = useLicenseStore((s) => s.verificationMessage);
 
   const prices = usePricesStore((s) => s.prices);
 
@@ -67,6 +76,9 @@ export function Billing() {
   );
   const [trialLoading, setTrialLoading] = useState(false);
   const [trialError, setTrialError] = useState('');
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
+  const [checkoutPending, setCheckoutPending] = useState<CheckoutSelection | null>(null);
 
   useEffect(() => {
     if (tier !== 'pro' && tier !== 'proPlus') {
@@ -84,6 +96,8 @@ export function Billing() {
     setKeyError('');
     try {
       await activateLicense(keyInput.trim());
+      setCheckoutPending(null);
+      setCheckoutError('');
       setShowKey(false);
       setKeyInput('');
     } catch (e) {
@@ -104,6 +118,9 @@ export function Billing() {
   };
 
   const handleCheckout = async (plan: 'pro' | 'proPlus', period: 'monthly' | 'yearly') => {
+    setCheckoutLoading(true);
+    setCheckoutError('');
+    setCheckoutPending({ plan, period });
     try {
       if (period === 'yearly') {
         await openAnnualCheckout(plan === 'proPlus' ? 'proplus_yearly' : 'pro_yearly', trialEmail || undefined);
@@ -111,7 +128,9 @@ export function Billing() {
         await openCheckout(plan === 'proPlus' ? 'proplus_monthly' : 'pro_monthly', trialEmail || undefined);
       }
     } catch (error) {
-      setTrialError(errorMessage(error, 'Could not open checkout.'));
+      setCheckoutError(errorMessage(error, 'Could not open checkout.'));
+    } finally {
+      setCheckoutLoading(false);
     }
   };
 
@@ -141,11 +160,73 @@ export function Billing() {
     }
   };
 
+  const checkoutNotice = (checkoutLoading || checkoutPending || checkoutError) ? (
+    <div
+      role={checkoutError ? 'alert' : 'status'}
+      aria-live="polite"
+      style={{
+        padding: '14px 16px', borderRadius: 10,
+        background: checkoutError ? 'rgba(239,68,68,0.08)' : 'rgba(45,212,191,0.08)',
+        border: `0.5px solid ${checkoutError ? 'rgba(239,68,68,0.28)' : 'rgba(45,212,191,0.24)'}`,
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, color: checkoutError ? '#f87171' : 'rgba(255,255,255,0.82)' }}>
+        {checkoutLoading
+          ? 'Opening secure checkout…'
+          : checkoutError
+            ? 'Checkout did not open'
+            : 'Finish your purchase in the browser'}
+      </div>
+      <div style={{ fontSize: 12, lineHeight: 1.5, color: 'rgba(255,255,255,0.55)', marginTop: 4 }}>
+        {checkoutError
+          ? checkoutError
+          : checkoutPending
+            ? `${PLAN_LABEL[checkoutPending.plan]} ${checkoutPending.period} checkout is open. After purchasing, return here and activate the license key from your receipt.`
+            : 'Duskry will keep this page ready while checkout opens.'}
+      </div>
+      {!checkoutLoading && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+          {(checkoutPending || checkoutError) && (
+            <button
+              type="button"
+              className="billing-button"
+              onClick={() => {
+                const selection = checkoutPending ?? { plan: 'pro', period: billing };
+                void handleCheckout(selection.plan, selection.period);
+              }}
+              style={noticeButtonStyle}
+            >
+              Reopen checkout
+            </button>
+          )}
+          <button
+            type="button"
+            className="billing-button"
+            onClick={() => { setShowKey(true); setKeyError(''); }}
+            style={noticeButtonStyle}
+          >
+            Enter license key
+          </button>
+          <button
+            type="button"
+            className="billing-button"
+            onClick={() => void fetchTier()}
+            disabled={refreshing}
+            style={noticeButtonStyle}
+          >
+            {refreshing ? 'Checking…' : 'Check status'}
+          </button>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   // ── Active subscription ─────────────────────────────────────────────────
   if (tier === 'pro' || tier === 'proPlus') {
     const planName = tier === 'proPlus' ? 'Pro+' : 'Pro';
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {checkoutNotice}
         {/* Status card */}
         <div className="glass-card" style={{ padding: '20px 22px' }}>
           <SectionLabel>Current plan</SectionLabel>
@@ -157,22 +238,52 @@ export function Billing() {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 16,
             }}>
-              ✦
+              <Crown size={16} aria-hidden="true" />
             </div>
             <div>
               <div style={{ fontSize: 15, fontWeight: 600 }}>{planName}</div>
               <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.40)', marginTop: 2 }}>
-                Active subscription
+                {verificationState === 'active' ? 'Active subscription' : 'Last known subscription'}
               </div>
             </div>
             <span style={{
               marginLeft: 'auto', fontSize: 10.5, fontWeight: 600, padding: '3px 10px',
-              borderRadius: 20, background: 'rgba(45,212,191,0.10)', color: 'rgba(45,212,191,0.85)',
-              border: '0.5px solid rgba(45,212,191,0.22)',
+              borderRadius: 20,
+              ...verificationBadgeStyle(verificationState),
             }}>
-              Active
+              {verificationLabel(verificationState)}
             </span>
           </div>
+
+          <div style={{
+            marginTop: 14, padding: '10px 12px', borderRadius: 8,
+            background: 'rgba(255,255,255,0.03)', border: '0.5px solid rgba(255,255,255,0.07)',
+            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px',
+          }}>
+            <PlanFact label="Plan" value={planName} />
+            <PlanFact label="Verification" value={verificationLabel(verificationState)} />
+            <PlanFact
+              label="Last verified"
+              value={lastVerifiedAt ? format(fromUnixTime(lastVerifiedAt), 'MMM d, yyyy, h:mm a') : 'Not available'}
+            />
+            <PlanFact
+              label="Billing details"
+              value="Available in billing portal"
+            />
+          </div>
+
+          {(verificationState === 'offline-grace' || verificationState === 'verification-needed') && (
+            <div role="status" style={{
+              marginTop: 10, padding: '9px 11px', borderRadius: 7,
+              background: 'rgba(251,191,36,0.08)', border: '0.5px solid rgba(251,191,36,0.22)',
+              color: 'rgba(255,255,255,0.65)', fontSize: 11.5, lineHeight: 1.45,
+            }}>
+              {verificationState === 'offline-grace'
+                ? `Duskry is offline and is preserving your ${planName} access${offlineGraceUntil ? ` through ${format(fromUnixTime(offlineGraceUntil), 'MMM d, yyyy')}` : ''}.`
+                : `Duskry could not reach the license server. Your last verified ${planName} plan remains active while you reconnect.`}
+              {verificationMessage ? ` ${verificationMessage}` : ''}
+            </div>
+          )}
 
           <div style={{ borderTop: '0.5px solid rgba(255,255,255,0.07)', marginTop: 16, paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 7 }}>
             {PLAN_FEATURES[tier === 'proPlus' ? 'proPlus' : 'pro'].map((f) => (
@@ -275,6 +386,7 @@ export function Billing() {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {checkoutNotice}
         {/* Trial status */}
         <div className="glass-card" style={{ padding: '20px 22px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -307,11 +419,13 @@ export function Billing() {
                 onClick={() => setCancelConfirm(true)}
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: 'rgba(255,255,255,0.28)' }}
               >
-                Cancel trial
+                Switch to Free
               </button>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>Cancel trial and lose access?</span>
+                <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
+                  Switch now? Your data stays, and paid features become read-only.
+                </span>
                 <button
                   className="billing-button billing-button-danger"
                   onClick={handleCancelTrial}
@@ -322,7 +436,7 @@ export function Billing() {
                     fontSize: 11.5, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
                   }}
                 >
-                  {cancelLoading ? 'Cancelling…' : 'Yes, cancel'}
+                  {cancelLoading ? 'Switching…' : 'Switch to Free'}
                 </button>
                 <button
                   className="billing-button billing-button-ghost"
@@ -342,14 +456,14 @@ export function Billing() {
             <SectionLabel>Compare plans</SectionLabel>
             <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: 7, padding: 2 }}>
               {(['monthly', 'yearly'] as const).map((b) => (
-                <button key={b} className="billing-button" onClick={() => setBilling(b)} style={{
+                <button key={b} className="billing-button" onClick={() => setBilling(b)} aria-pressed={billing === b} style={{
                   padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer',
                   fontSize: 11, fontFamily: 'Inter, sans-serif', fontWeight: billing === b ? 500 : 400,
                   background: billing === b ? 'rgba(45,212,191,0.16)' : 'transparent',
                   color: billing === b ? 'rgba(45,212,191,0.90)' : 'rgba(255,255,255,0.38)',
                   transition: 'all 0.13s',
                 }}>
-                  {b === 'monthly' ? 'Monthly' : 'Yearly −33%'}
+                  {b === 'monthly' ? 'Monthly' : 'Yearly'}
                 </button>
               ))}
             </div>
@@ -397,6 +511,7 @@ export function Billing() {
             <button
               className="btn-primary billing-button"
               onClick={() => handleCheckout(planKey === 'proPlus' ? 'proPlus' : 'pro', billing)}
+              disabled={checkoutLoading}
               style={{ fontSize: 11.5, padding: '6px 0' }}
             >
               Subscribe →
@@ -405,6 +520,7 @@ export function Billing() {
               <button
                 className="billing-button"
                 onClick={() => handleCheckout('proPlus', billing)}
+                disabled={checkoutLoading}
                 style={{
                   padding: '6px 0', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.15)',
                   background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.65)',
@@ -432,6 +548,7 @@ export function Billing() {
             <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <input
                 className="glass-input"
+                aria-label="License key"
                 placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value)}
@@ -456,6 +573,17 @@ export function Billing() {
   // ── Free / expired ──────────────────────────────────────────────────────
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {checkoutNotice}
+      {verificationState === 'invalid' && (
+        <div role="alert" style={{
+          padding: '12px 16px', borderRadius: 10,
+          background: 'rgba(239,68,68,0.08)', border: '0.5px solid rgba(239,68,68,0.25)',
+          fontSize: 12.5, lineHeight: 1.5, color: 'rgba(248,113,113,0.92)',
+        }}>
+          <strong>License verification failed.</strong>{' '}
+          {verificationMessage ?? 'The previous paid license is no longer valid. You can stay on Free or activate another license.'}
+        </div>
+      )}
       {tier === 'free' && trialStartedAt <= 0 && (
         <div className="glass-card" style={{ padding: '20px 22px' }}>
           <SectionLabel>Free trial</SectionLabel>
@@ -485,6 +613,7 @@ export function Billing() {
                   key={plan}
                   className="billing-button"
                   onClick={() => setTrialPlan(plan)}
+                  aria-pressed={active}
                   style={{
                     textAlign: 'left',
                     padding: '10px 12px',
@@ -523,7 +652,7 @@ export function Billing() {
           background: 'rgba(239,68,68,0.08)', border: '0.5px solid rgba(239,68,68,0.25)',
           fontSize: 12.5, color: 'rgba(239,68,68,0.85)',
         }}>
-          Your trial has ended. Subscribe below to regain full access.
+          Your trial has ended. Your data is safe—you can continue with Free or subscribe for paid features.
         </div>
       )}
 
@@ -538,6 +667,7 @@ export function Billing() {
                 key={b}
                 className="billing-button"
                 onClick={() => setBilling(b)}
+                aria-pressed={billing === b}
                 style={{
                   padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer',
                   fontSize: 11, fontFamily: 'Inter, sans-serif', fontWeight: billing === b ? 500 : 400,
@@ -546,7 +676,7 @@ export function Billing() {
                   transition: 'all 0.13s',
                 }}
               >
-                {b === 'monthly' ? 'Monthly' : 'Yearly −33%'}
+                {b === 'monthly' ? 'Monthly' : 'Yearly'}
               </button>
             ))}
           </div>
@@ -612,6 +742,7 @@ export function Billing() {
             <button
               className="billing-button"
               onClick={() => handleCheckout('pro', billing)}
+              disabled={checkoutLoading}
               style={{
                 width: '100%', padding: '5px 0', borderRadius: 6, border: '0.5px solid rgba(255,255,255,0.15)',
                 background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.70)',
@@ -625,6 +756,7 @@ export function Billing() {
             <button
               className="billing-button"
               onClick={() => handleCheckout('proPlus', billing)}
+              disabled={checkoutLoading}
               style={{
                 width: '100%', padding: '5px 0', borderRadius: 6,
                 border: '0.5px solid rgba(45,212,191,0.40)',
@@ -656,6 +788,7 @@ export function Billing() {
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <input
               className="glass-input"
+              aria-label="License key"
               placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
@@ -682,6 +815,45 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
       {children}
+    </div>
+  );
+}
+
+const noticeButtonStyle: React.CSSProperties = {
+  padding: '5px 10px', borderRadius: 6,
+  border: '0.5px solid rgba(255,255,255,0.14)',
+  background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.72)',
+  fontSize: 11.5, cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+};
+
+function verificationLabel(state: EntitlementVerificationState) {
+  switch (state) {
+    case 'loading': return 'Checking…';
+    case 'active': return 'Verified';
+    case 'offline-grace': return 'Offline access';
+    case 'verification-needed': return 'Check needed';
+    case 'invalid': return 'Invalid';
+  }
+}
+
+function verificationBadgeStyle(state: EntitlementVerificationState): React.CSSProperties {
+  if (state === 'active') {
+    return {
+      background: 'rgba(45,212,191,0.10)', color: 'rgba(45,212,191,0.85)',
+      border: '0.5px solid rgba(45,212,191,0.22)',
+    };
+  }
+  return {
+    background: 'rgba(251,191,36,0.10)', color: 'rgba(251,191,36,0.90)',
+    border: '0.5px solid rgba(251,191,36,0.25)',
+  };
+}
+
+function PlanFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.38)', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.70)' }}>{value}</div>
     </div>
   );
 }
