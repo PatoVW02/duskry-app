@@ -15,9 +15,7 @@ const MAX_BYTES: u64 = 200_000;
 const KEEP_LINES: usize = 2_000;
 
 fn log_path() -> PathBuf {
-    static PATH: Lazy<PathBuf> = Lazy::new(|| {
-        crate::paths::app_data_file("tracker.log")
-    });
+    static PATH: Lazy<PathBuf> = Lazy::new(|| crate::paths::app_data_file("tracker.log"));
     PATH.clone()
 }
 

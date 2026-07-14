@@ -26,7 +26,14 @@ $xml.LoadXml('<toast><visual><binding template="ToastText02"><text id="1">{}</te
         use std::os::windows::process::CommandExt;
 
         let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &script,
+            ])
             .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }

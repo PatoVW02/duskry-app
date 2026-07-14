@@ -3,8 +3,8 @@ pub(crate) mod feature_flags;
 mod license;
 mod logger;
 mod notify;
-mod permissions;
 mod paths;
+mod permissions;
 mod rules;
 mod tracker;
 mod tray;
@@ -409,8 +409,7 @@ fn start_trial(email: String) -> Result<i64, String> {
     db::set_setting("trial_email", &email).map_err(|e| e.to_string())?;
     let started_at = chrono::Utc::now().timestamp();
     let expires_at = started_at + 7 * 24 * 60 * 60;
-    db::set_setting("trial_started_at", &started_at.to_string())
-    .map_err(|e| e.to_string())?;
+    db::set_setting("trial_started_at", &started_at.to_string()).map_err(|e| e.to_string())?;
     db::set_setting("trial_expires_at", &expires_at.to_string()).map_err(|e| e.to_string())?;
     db::set_setting("trial_status", "active").map_err(|e| e.to_string())?;
     Ok(expires_at)

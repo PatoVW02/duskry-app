@@ -149,7 +149,11 @@ fn read_cache() -> Option<LicenseCache> {
     } else {
         None
     }
-    .or_else(|| cipher.decrypt(Nonce::from_slice(b"duskry-nonce"), data.as_ref()).ok())?;
+    .or_else(|| {
+        cipher
+            .decrypt(Nonce::from_slice(b"duskry-nonce"), data.as_ref())
+            .ok()
+    })?;
     serde_json::from_slice(&plaintext).ok()
 }
 
@@ -222,20 +226,34 @@ fn tier_from_meta(meta: Option<&LSMeta>) -> Result<&'static str, String> {
     let meta = meta.ok_or_else(|| "The license response did not include a plan.".to_string())?;
     let variant = meta.variant_id.map(|id| id.to_string());
     if variant.as_deref().is_some_and(|id| {
-        [option_env!("DUSKRY_VARIANT_PROPLUS_MONTHLY"), option_env!("DUSKRY_VARIANT_PROPLUS_YEARLY")]
-            .into_iter().flatten().any(|configured| configured == id)
+        [
+            option_env!("DUSKRY_VARIANT_PROPLUS_MONTHLY"),
+            option_env!("DUSKRY_VARIANT_PROPLUS_YEARLY"),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|configured| configured == id)
     }) {
         return Ok("proplus");
     }
     if variant.as_deref().is_some_and(|id| {
-        [option_env!("DUSKRY_VARIANT_PRO_MONTHLY"), option_env!("DUSKRY_VARIANT_PRO_YEARLY")]
-            .into_iter().flatten().any(|configured| configured == id)
+        [
+            option_env!("DUSKRY_VARIANT_PRO_MONTHLY"),
+            option_env!("DUSKRY_VARIANT_PRO_YEARLY"),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|configured| configured == id)
     }) {
         return Ok("pro");
     }
 
     // Compatibility for local/dev builds made before variant IDs were required.
-    let label = format!("{} {}", meta.product_name, meta.variant_name.as_deref().unwrap_or(""));
+    let label = format!(
+        "{} {}",
+        meta.product_name,
+        meta.variant_name.as_deref().unwrap_or("")
+    );
     let label = label.to_lowercase();
     if label.contains("pro+") || label.contains("proplus") || label.contains("pro plus") {
         Ok("proplus")
@@ -247,7 +265,11 @@ fn tier_from_meta(meta: Option<&LSMeta>) -> Result<&'static str, String> {
 }
 
 fn app_tier(tier: &str) -> AppTier {
-    if tier == "proplus" { AppTier::ProPlus } else { AppTier::Pro }
+    if tier == "proplus" {
+        AppTier::ProPlus
+    } else {
+        AppTier::Pro
+    }
 }
 
 async fn validate_existing(cache: &LicenseCache) -> Result<AppTier, String> {
@@ -259,28 +281,42 @@ async fn validate_existing(cache: &LicenseCache) -> Result<AppTier, String> {
         .post("https://api.lemonsqueezy.com/v1/licenses/validate")
         .header("Accept", "application/json")
         .form(&form)
-        .send().await.map_err(|e| format!("Could not reach Lemon Squeezy: {e}"))?;
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach Lemon Squeezy: {e}"))?;
     if !response.status().is_success() {
         return Err(format!("License server returned {}.", response.status()));
     }
-    let body = response.json::<LSValidateResponse>().await.map_err(|e| e.to_string())?;
+    let body = response
+        .json::<LSValidateResponse>()
+        .await
+        .map_err(|e| e.to_string())?;
     if !body.valid {
         clear_cache();
-        return Err(body.error.unwrap_or_else(|| "This license is no longer valid.".to_string()));
+        return Err(body
+            .error
+            .unwrap_or_else(|| "This license is no longer valid.".to_string()));
     }
     let tier = tier_from_meta(body.meta.as_ref())?;
-    let instance_id = body.instance.map(|instance| instance.id).or_else(|| cache.instance_id.clone());
+    let instance_id = body
+        .instance
+        .map(|instance| instance.id)
+        .or_else(|| cache.instance_id.clone());
     write_cache_with_instance(&cache.key, tier, instance_id)?;
     Ok(app_tier(tier))
 }
 
 pub async fn refresh_license_online() -> Result<AppTier, String> {
-    let Some(cache) = read_cache() else { return Ok(get_effective_tier()); };
+    let Some(cache) = read_cache() else {
+        return Ok(get_effective_tier());
+    };
     validate_existing(&cache).await
 }
 
 pub async fn validate_license_online(license_key: &str) -> Result<AppTier, String> {
-    if let Some(cache) = read_cache().filter(|cache| cache.key == license_key && cache.instance_id.is_some()) {
+    if let Some(cache) =
+        read_cache().filter(|cache| cache.key == license_key && cache.instance_id.is_some())
+    {
         return validate_existing(&cache).await;
     }
     let client = reqwest::Client::new();
@@ -351,7 +387,10 @@ pub async fn remove_license_online() -> Result<AppTier, String> {
         return Ok(AppTier::Free);
     }
     if status.is_client_error() {
-        return Err(format!("Could not deactivate the license ({}). Please try again.", status));
+        return Err(format!(
+            "Could not deactivate the license ({}). Please try again.",
+            status
+        ));
     }
 
     let body = response
@@ -387,8 +426,16 @@ mod tests {
 
     #[test]
     fn maps_legacy_plan_labels_without_guessing_unknown_plans() {
-        let pro_plus = LSMeta { product_name: "Duskry".into(), variant_name: Some("Pro+ Yearly".into()), variant_id: None };
-        let unknown = LSMeta { product_name: "Duskry".into(), variant_name: Some("Starter".into()), variant_id: None };
+        let pro_plus = LSMeta {
+            product_name: "Duskry".into(),
+            variant_name: Some("Pro+ Yearly".into()),
+            variant_id: None,
+        };
+        let unknown = LSMeta {
+            product_name: "Duskry".into(),
+            variant_name: Some("Starter".into()),
+            variant_id: None,
+        };
         assert_eq!(tier_from_meta(Some(&pro_plus)).unwrap(), "proplus");
         assert!(tier_from_meta(Some(&unknown)).is_err());
     }

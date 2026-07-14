@@ -570,12 +570,22 @@ fn build_rich_rule_candidates(
                 rule_condition("app", "equals", app_name),
                 rule_condition("title", "contains", title),
             ]);
-            upsert_learning_signal_count(conn, project_id, "compound", "matches", &value, title_count)?;
+            upsert_learning_signal_count(
+                conn,
+                project_id,
+                "compound",
+                "matches",
+                &value,
+                title_count,
+            )?;
             candidates.push((
                 "compound".to_string(),
                 "matches".to_string(),
                 value,
-                format!("app equals \"{}\" AND window title contains \"{}\"", app_name, title),
+                format!(
+                    "app equals \"{}\" AND window title contains \"{}\"",
+                    app_name, title
+                ),
             ));
         }
 
@@ -597,7 +607,14 @@ fn build_rich_rule_candidates(
                     &format!("{}-{}", time_bucket.start_minute, time_bucket.end_minute),
                 ),
             ]);
-            upsert_learning_signal_count(conn, project_id, "compound", "matches", &value, timed_title_count)?;
+            upsert_learning_signal_count(
+                conn,
+                project_id,
+                "compound",
+                "matches",
+                &value,
+                timed_title_count,
+            )?;
             candidates.push((
                 "compound".to_string(),
                 "matches".to_string(),

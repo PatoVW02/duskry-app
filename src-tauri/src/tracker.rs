@@ -394,8 +394,8 @@ fn tracking_worker_loop(generation: u64) {
             } else if let Some(ref prev) = last {
                 current.url = prev.url.clone();
             }
-            let changed = window_changed
-                || last.as_ref().map(|w| w.url != current.url).unwrap_or(false);
+            let changed =
+                window_changed || last.as_ref().map(|w| w.url != current.url).unwrap_or(false);
 
             // Periodic same-window tick log (every 15 s) so we can see the loop
             // is alive and what osascript is reporting even with no state changes.
@@ -471,8 +471,7 @@ fn tracking_worker_loop(generation: u64) {
                     current.file_path.as_deref(),
                     current.url.as_deref(),
                     now,
-                )
-                {
+                ) {
                     Ok(new_id) => {
                         crate::logger::tlog(&format!("  Started activity #{}", new_id));
                         CURRENT_ACTIVITY_ID.store(new_id, Ordering::SeqCst);
@@ -684,7 +683,6 @@ fn normalize_ax_document(value: &str) -> Option<String> {
         .map(|raw| raw.replace("%20", " "))
         .or_else(|| Some(trimmed.to_string()))
 }
-
 
 #[cfg(target_os = "macos")]
 fn get_browser_title(app_name: &str) -> Option<String> {
