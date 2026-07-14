@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { onAction } from '@tauri-apps/plugin-notification';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
+import { relaunch } from '@tauri-apps/plugin-process';
 import './index.css';
 import { useUpdater, AUTO_UPDATE_POLL_MS } from './hooks/useUpdater';
 import { UpdaterContext } from './contexts/UpdaterContext';
 
 import { SceneBackground } from './components/layout/SceneBackground';
+import { StartupGate } from './components/layout/StartupGate';
+import { StartupUpdateToast } from './components/layout/StartupUpdateToast';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { PaywallModal } from './components/license/PaywallModal';
@@ -35,6 +37,8 @@ import { useProjectStore } from './stores/useProjectStore';
 import { useActivityStore } from './stores/useActivityStore';
 import { usePricesStore } from './stores/usePricesStore';
 import { billingPlansEnabled } from './lib/featureFlags';
+import { historyLimitDays } from './lib/historyAccess';
+import { resolveAppStartupState } from './lib/startupState';
 
 type Page = 'today' | 'review' | 'projects' | 'rules' | 'reports' | 'settings';
 type OnboardingStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -57,7 +61,7 @@ function App() {
   const updaterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const updaterIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const { onboardingComplete, loadSettings } = useSettingsStore();
+  const { onboardingComplete, settingsHydrated, settingsError, loadSettings } = useSettingsStore();
   const scenePreviewMode = useSettingsStore((s) => s.scenePreviewMode);
   const scenePreviewScene = useSettingsStore((s) => s.scenePreviewScene);
   const closeScenePreview = useSettingsStore((s) => s.closeScenePreview);
@@ -65,6 +69,7 @@ function App() {
   const setScene = useSettingsStore((s) => s.setScene);
   const setSceneAuto = useSettingsStore((s) => s.setSceneAuto);
   const tier = useLicenseStore((s) => s.tier);
+  const selectedPlan = useLicenseStore((s) => s.selectedPlan);
   const fetchTier = useLicenseStore((s) => s.fetchTier);
   const fetchProjects = useProjectStore((s) => s.fetchProjects);
   const fetchPrices = usePricesStore((s) => s.fetchPrices);
@@ -73,12 +78,15 @@ function App() {
   const goToToday = useActivityStore((s) => s.goToToday);
   const clearPendingRuleSuggestions = useActivityStore((s) => s.clearPendingRuleSuggestions);
 
-  // History retention cutoff: free=7d, pro/trial=90d, proPlus=unlimited
-  const historyLimitDays = !billingPlansEnabled ? null : tier === 'proPlus' ? null : tier === 'pro' || tier === 'proTrial' ? 90 : 7;
-  const historyLimitDate = historyLimitDays
-    ? new Date(Date.now() - historyLimitDays * 24 * 60 * 60 * 1000)
+  // History retention cutoff: Free=7d, Pro=90d, Pro+=unlimited. A local
+  // Pro+ trial must receive the same history entitlement advertised during
+  // onboarding even though both trial plans share the `proTrial` native tier.
+  const historyDays = historyLimitDays(billingPlansEnabled, tier, selectedPlan);
+  const historyLimitDate = historyDays
+    ? new Date(Date.now() - historyDays * 24 * 60 * 60 * 1000)
     : null;
   const canGoBack = !historyLimitDate || viewDate > historyLimitDate;
+  const appStartupState = resolveAppStartupState(settingsHydrated, onboardingComplete);
 
   const openBillingSettings = () => {
     if (!billingPlansEnabled) {
@@ -147,12 +155,12 @@ function App() {
   }, [fetchTier]);
 
   // Start tracking loop for returning users (new users start it in AllSetScreen)
-  const prevOnboardingComplete = useRef(onboardingComplete);
+  const prevOnboardingComplete = useRef<boolean | null>(null);
   useEffect(() => {
     // Only invoke on the initial load when already complete (returning user).
     // Skip when it just flipped true (AllSetScreen already called start_tracking).
-    if (onboardingComplete && prevOnboardingComplete.current) {
-      invoke('start_tracking');
+    if (onboardingComplete === true && prevOnboardingComplete.current === null) {
+      void invoke('start_tracking').catch(() => {});
     }
     prevOnboardingComplete.current = onboardingComplete;
   }, [onboardingComplete]);
@@ -183,22 +191,26 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    const unlistenPromise = onAction(async (notification) => {
-      if (!mounted) return;
-      if (notification.extra?.kind !== 'update-ready') return;
-      await openAboutSettings();
-    });
-
-    return () => {
-      mounted = false;
-      void unlistenPromise.then((listener) => listener.unregister());
-    };
-  }, []);
-
   // ── Onboarding ──────────────────────────────────────────────
-  if (!onboardingComplete) {
+  if (appStartupState === 'loading') {
+    return <StartupGate error={null} onRetry={() => void loadSettings()} />;
+  }
+
+  if (appStartupState === 'error') {
+    const databaseStartupFailed = settingsError?.includes('Local database:') ?? false;
+    return (
+      <StartupGate
+        error={settingsError ?? 'The onboarding status is unavailable. Please try again.'}
+        actionLabel={databaseStartupFailed ? 'Restart Duskry' : 'Try again'}
+        onRetry={() => {
+          if (databaseStartupFailed) void relaunch();
+          else void loadSettings();
+        }}
+      />
+    );
+  }
+
+  if (appStartupState === 'onboarding') {
     const next = () => setObStep((s) => Math.min(s + 1, 6) as OnboardingStep);
     switch (obStep) {
       case 0: return <WelcomeScreen onNext={next} />;
@@ -222,11 +234,22 @@ function App() {
     <div className="app-shell">
       <SceneBackground />
       <div className="scene-overlay" />
-      <WhatsNewModal enabled={onboardingComplete} />
+      <WhatsNewModal enabled={onboardingComplete === true} />
       <SmartRuleNotice onReview={() => setPage('rules')} />
       <div className="app-content">
         <Sidebar activePage={page} onNavigate={setPage} />
         <div className={`main-area ${scenePreviewMode ? 'main-area--scene-preview' : ''}`}>
+          {startupUpdateToast && (
+            <StartupUpdateToast
+              kind={startupUpdateToast.kind}
+              version={startupUpdateToast.version}
+              onDismiss={() => setStartupUpdateToast(null)}
+              onOpenUpdater={() => {
+                setStartupUpdateToast(null);
+                void openAboutSettings();
+              }}
+            />
+          )}
           {scenePreviewMode ? (
             <div className="scene-preview-panel">
               <div className="scene-preview-actions">
@@ -266,71 +289,6 @@ function App() {
                   historyLocked: !canGoBack,
                 } : undefined}
               />
-              {startupUpdateToast && (
-                <div
-                  className="glass-card"
-                  style={{
-                    position: 'absolute',
-                    top: 18,
-                    right: 24,
-                    zIndex: 30,
-                    width: 320,
-                    padding: '14px 14px 12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 10,
-                    background: 'rgba(8, 18, 24, 0.82)',
-                    border: '1px solid rgba(45,212,191,0.22)',
-                    boxShadow: '0 16px 40px rgba(0,0,0,0.28)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.92)' }}>
-                        {startupUpdateToast.kind === 'downloaded' ? 'Update Ready' : 'Update Available'}
-                      </div>
-                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 4, lineHeight: 1.45 }}>
-                        Duskry {startupUpdateToast.version} {startupUpdateToast.kind === 'downloaded' ? 'has already been downloaded.' : 'is available to install.'}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setStartupUpdateToast(null)}
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        color: 'rgba(255,255,255,0.42)',
-                        cursor: 'pointer',
-                        padding: 0,
-                        boxShadow: 'none',
-                        fontSize: 16,
-                        lineHeight: 1,
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <button
-                      className="btn-secondary"
-                      style={{ width: 'auto', padding: '7px 12px', fontSize: 12 }}
-                      onClick={() => setStartupUpdateToast(null)}
-                    >
-                      Later
-                    </button>
-                    <button
-                      className="btn-primary"
-                      style={{ width: 'auto', padding: '7px 12px', fontSize: 12 }}
-                      onClick={() => {
-                        setStartupUpdateToast(null);
-                        void openAboutSettings();
-                      }}
-                    >
-                      Open updater
-                    </button>
-                  </div>
-                </div>
-              )}
               <div className={`page-content ${page === 'review' ? 'page-content--activity' : ''}`}>
                 {page === 'review'    && <ActivityPage onUpgrade={openBillingSettings} />}
                 {page === 'projects'  && <Projects onUpgrade={openBillingSettings} />}

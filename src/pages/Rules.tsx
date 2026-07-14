@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { billingPlansEnabled } from '../lib/featureFlags';
+import { detectMacOS, isRuleFieldSupported, supportedRuleFieldOptions } from '../lib/rulePlatform';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import {
@@ -136,7 +137,8 @@ const URL_OPERATOR_OPTIONS = [
 ];
 
 const RUNNING_ON_MACOS = typeof navigator !== 'undefined'
-  && /mac/i.test(`${navigator.platform} ${navigator.userAgent}`);
+  && detectMacOS(navigator.platform, navigator.userAgent);
+const CREATE_FIELD_OPTIONS = supportedRuleFieldOptions(FIELD_OPTIONS, RUNNING_ON_MACOS);
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -167,6 +169,17 @@ function parseCompoundRule(rule: RuleRecord): ConditionNode | null {
   } catch {
     return null;
   }
+}
+
+function conditionUsesField(node: ConditionNode, field: string): boolean {
+  if (node.field === field) return true;
+  return node.conditions?.some((condition) => conditionUsesField(condition, field)) ?? false;
+}
+
+function ruleUsesField(rule: RuleRecord, field: string): boolean {
+  if (rule.field === field) return true;
+  const compound = parseCompoundRule(rule);
+  return compound ? conditionUsesField(compound, field) : false;
 }
 
 function nodeSummary(node: ConditionNode): string {
@@ -454,7 +467,11 @@ export function Rules({ onUpgrade, onOpenProjects }: RulesProps) {
         <div className="rules-page__automation-foot">
           <div>
             <strong>Rules can override the focus project</strong>
-            <span>When a matching app or website rule is more specific, use its target project.</span>
+            <span>
+              {RUNNING_ON_MACOS
+                ? 'When a matching application or website rule is more specific, use its target project.'
+                : 'When a matching application, window title, or file path rule is more specific, use its target project.'}
+            </span>
           </div>
           <button
             type="button"
@@ -557,7 +574,7 @@ export function Rules({ onUpgrade, onOpenProjects }: RulesProps) {
               <label>
                 <span>Match</span>
                 <select value={newField} onChange={(event) => changeNewField(event.target.value)}>
-                  {FIELD_OPTIONS.map((option) => (
+                  {CREATE_FIELD_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
@@ -632,6 +649,7 @@ export function Rules({ onUpgrade, onOpenProjects }: RulesProps) {
                   expanded={expandedRuleIds.has(ruleId)}
                   busy={busyRuleIds.has(ruleId)}
                   confirmingDelete={deleteConfirmId === ruleId}
+                  platformUnavailable={!isRuleFieldSupported('url', RUNNING_ON_MACOS) && ruleUsesField(rule, 'url')}
                   onToggleDetails={() => toggleRuleDetails(ruleId)}
                   onToggle={() => void toggleRule(rule)}
                   onAskDelete={() => setDeleteConfirmId(ruleId)}
@@ -653,6 +671,7 @@ function StoredRuleCard({
   expanded,
   busy,
   confirmingDelete,
+  platformUnavailable,
   onToggleDetails,
   onToggle,
   onAskDelete,
@@ -664,6 +683,7 @@ function StoredRuleCard({
   expanded: boolean;
   busy: boolean;
   confirmingDelete: boolean;
+  platformUnavailable: boolean;
   onToggleDetails: () => void;
   onToggle: () => void;
   onAskDelete: () => void;
@@ -687,6 +707,9 @@ function StoredRuleCard({
             <span className={`rules-page__status${rule.enabled ? ' rules-page__status--enabled' : ''}`}>
               {rule.enabled ? 'Enabled' : 'Paused'}
             </span>
+            {platformUnavailable && (
+              <span className="rules-page__status rules-page__status--system">macOS only</span>
+            )}
           </div>
           <div className="rules-page__rule-meta">
             <span className="rules-page__project-chip">
@@ -770,6 +793,11 @@ function StoredRuleCard({
             <span>Condition</span>
             <strong>{ruleSummary(rule)}</strong>
           </div>
+          {platformUnavailable && (
+            <p className="rules-page__details-note">
+              Website hostname matching is unavailable on Windows because Windows activity tracking does not capture browser hostnames.
+            </p>
+          )}
           {learned && confidence != null && (
             <div className="rules-page__details-wide">
               <span>Confidence</span>

@@ -4,15 +4,17 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
-    TrayIconBuilder::with_id("main")
-        .icon(app.default_window_icon().unwrap().clone())
+    let mut tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("Duskry")
         .on_menu_event(|app, event| {
             handle_menu_event(app, event.id().as_ref());
-        })
-        .build(app)?;
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
     Ok(())
 }
 
@@ -25,10 +27,20 @@ pub fn rebuild_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let projects = crate::db::get_all_projects().unwrap_or_default();
-    let active_id = crate::db::get_setting("active_project_id")
+    let mut projects = crate::db::get_all_projects().unwrap_or_default();
+    projects.retain(|project| {
+        project
+            .id
+            .is_some_and(|project_id| crate::validate_project_access(project_id).is_ok())
+    });
+    let stored_active_id = crate::db::get_setting("active_project_id")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
+    let active_id = if crate::validate_project_access(stored_active_id).is_ok() {
+        stored_active_id
+    } else {
+        0
+    };
     let paused = crate::tracker::TRACKING_PAUSED.load(std::sync::atomic::Ordering::SeqCst);
 
     // ── Focus label (non-clickable header) ───────────────────────
@@ -128,6 +140,11 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         other => {
             if let Some(pid_str) = other.strip_prefix("project_") {
                 if let Ok(pid) = pid_str.parse::<i64>() {
+                    if crate::validate_project_access(pid).is_err() {
+                        let _ = rebuild_tray(app);
+                        let _ = app.emit("settings-changed", ());
+                        return;
+                    }
                     crate::tracker::ACTIVE_PROJECT_ID
                         .store(pid, std::sync::atomic::Ordering::SeqCst);
                     let _ = crate::db::set_setting("active_project_id", &pid.to_string());

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { NightMountainsScene } from '../scenes/NightMountainsScene';
 import { ForestDawnScene } from '../scenes/ForestDawnScene';
 import { AlpineDayScene } from '../scenes/AlpineDayScene';
@@ -35,9 +36,27 @@ export function SceneBackground() {
   const autoSceneSchedule = useSettingsStore((s) => s.autoSceneSchedule);
   const scenePreviewMode = useSettingsStore((s) => s.scenePreviewMode);
   const scenePreviewScene = useSettingsStore((s) => s.scenePreviewScene);
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    if (!sceneAuto) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleNextMinute = () => {
+      const delay = 60_000 - (Date.now() % 60_000) + 25;
+      timer = setTimeout(() => {
+        setNow(new Date());
+        scheduleNextMinute();
+      }, delay);
+    };
+    setNow(new Date());
+    scheduleNextMinute();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [sceneAuto]);
 
   const activeScene: SceneId = sceneAuto
-    ? getAutoScene(autoSceneSchedule, new Date())
+    ? getAutoScene(autoSceneSchedule, now)
     : scene;
 
   return (

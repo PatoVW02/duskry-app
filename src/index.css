@@ -1076,7 +1076,8 @@ button,
   transition: opacity 0.15s;
   pointer-events: none;
 }
-.scene-thumb:hover .scene-thumb-actions {
+.scene-thumb:hover .scene-thumb-actions,
+.scene-thumb:focus-within .scene-thumb-actions {
   opacity: 1;
   pointer-events: auto;
 }

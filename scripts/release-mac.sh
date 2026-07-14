@@ -163,19 +163,24 @@ if [ -n "$APP_TAR" ] && [ -n "$APP_SIG" ]; then
   }
 }
 JSONEOF
-  cp "${TMP}/mac-latest.json" "${TMP}/latest.json"
   echo "  Updater manifest generated: ${FILENAME}"
 else
-  echo "  Warning: .app.tar.gz.sig not found — TAURI_SIGNING_PRIVATE_KEY may not be set."
-  echo "  Auto-updater will not work for Mac users on this release."
+  echo "Error: the signed macOS updater bundle was not generated."
+  echo "Refusing to publish a release that cannot update existing Mac users."
+  exit 1
 fi
 
-# ── Tag & create release, upload all Mac assets ─────────────────────────────
-echo "▶ Tagging ${TAG} and creating GitHub release"
+# ── Tag & stage a draft release, upload all Mac assets ────────────────────
+# The tag push starts the Windows workflow. That workflow explicitly waits for
+# this draft and is the only place allowed to publish it. If this script or the
+# Windows build fails, the previous public release remains the updater target.
+echo "▶ Tagging ${TAG} and staging a draft GitHub release"
 git tag "${TAG}"
 git push origin "${TAG}"
 
 gh release create "${TAG}" \
+  --draft \
+  --verify-tag \
   --title "Duskry ${TAG}" \
   --notes-file "${TMP}/release-notes.md"
 
@@ -189,14 +194,13 @@ if [ -f "${TMP}/mac-latest.json" ]; then
   gh release upload "${TAG}" "$APP_TAR" --clobber
   # Upload mac-only manifest (CI will merge Windows into it)
   gh release upload "${TAG}" "${TMP}/mac-latest.json" --clobber
-  # Upload initial latest.json (Mac only — CI will merge Windows entry in)
-  gh release upload "${TAG}" "${TMP}/latest.json" --clobber
 fi
 
 echo ""
-echo "✓ macOS release ${TAG} published"
+echo "✓ macOS assets for ${TAG} uploaded to a draft release"
 echo "  Duskry_arm64.dmg     → Apple Silicon"
 echo "  Duskry_x64.dmg       → Intel"
 echo "  Duskry_universal.dmg → Universal"
 echo ""
-echo "  Windows build + updater merge will be done by GitHub Actions CI."
+echo "  GitHub Actions will build Windows, merge and validate the updater"
+echo "  manifest, upload final notes, and publish the completed release."

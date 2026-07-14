@@ -138,6 +138,10 @@ These are required by the Windows release workflow:
 | --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` | Signs Windows updater bundles |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the signing key |
+| `WINDOWS_CERTIFICATE` | Base64-encoded PFX Authenticode certificate imported into the Windows runner |
+| `WINDOWS_CERTIFICATE_PASSWORD` | Export password for the PFX certificate |
+
+The workflow also requires a `WINDOWS_TIMESTAMP_URL` GitHub Actions repository variable supplied by the certificate provider. It generates a runner-only `tauri.windows.conf.json` from the imported certificate and fails before building if any signing input is missing, so a production release cannot silently publish unsigned Windows installers.
 
 Note: the current Windows workflow embeds the Lemon Squeezy checkout URLs directly in the workflow file instead of reading them from GitHub Secrets.
 
@@ -145,7 +149,7 @@ Note: the current Windows workflow embeds the Lemon Squeezy checkout URLs direct
 
 ### Desktop app: `App/.env`
 
-Based on [.env.example](/Users/patricio/Development/Personal/Apps/Duskry/App/.env.example):
+Based on [`.env.example`](.env.example):
 
 | Variable | Purpose |
 | --- | --- |
@@ -163,7 +167,7 @@ Based on [.env.example](/Users/patricio/Development/Personal/Apps/Duskry/App/.en
 
 ### Landing page: `Landing/.env.local`
 
-Based on [Landing/.env.local.example](/Users/patricio/Development/Personal/Apps/Duskry/Landing/.env.local.example):
+The separate Landing project uses its own `Landing/.env.local.example` file:
 
 | Variable | Purpose |
 | --- | --- |

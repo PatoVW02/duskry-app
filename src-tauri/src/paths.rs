@@ -6,7 +6,12 @@ const DEV_APP_DIR: &str = "duskry-dev";
 pub fn app_data_dir() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push(app_storage_dir_name());
-    std::fs::create_dir_all(&path).ok();
+    if let Err(error) = std::fs::create_dir_all(&path) {
+        eprintln!(
+            "Could not create app-data directory {}: {error}",
+            path.display()
+        );
+    }
     path
 }
 

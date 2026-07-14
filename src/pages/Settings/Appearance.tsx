@@ -27,7 +27,11 @@ export function Appearance() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <div
+          <button
+            type="button"
+            role="switch"
+            aria-checked={sceneAuto}
+            aria-label="Auto-select background scene by time of day"
             style={{
               width: 34,
               height: 20,
@@ -37,8 +41,10 @@ export function Appearance() {
               position: 'relative',
               transition: 'background 0.2s',
               flexShrink: 0,
+              border: 'none',
+              padding: 0,
             }}
-            onClick={() => setSceneAuto(!sceneAuto)}
+            onClick={() => void setSceneAuto(!sceneAuto)}
           >
             <div style={{
               width: 16,
@@ -50,7 +56,7 @@ export function Appearance() {
               left: sceneAuto ? 16 : 2,
               transition: 'left 0.2s',
             }}/>
-          </div>
+          </button>
           <span style={{ fontSize: 13 }}>Auto-select by time of day</span>
         </div>
 
@@ -120,10 +126,11 @@ export function Appearance() {
 
         <div className="scene-grid">
           {SCENE_IDS.map((id) => (
-            <button
+            <div
               key={id}
               className={`scene-thumb ${scene === id && !sceneAuto ? 'active' : ''}`}
-              type="button"
+              role="group"
+              aria-label={`${SCENE_LABELS[id]} background`}
             >
               <SceneThumbnail id={id} />
               <div className="scene-thumb-actions">
@@ -149,7 +156,7 @@ export function Appearance() {
                 </button>
               </div>
               <span>{SCENE_LABELS[id]}</span>
-            </button>
+            </div>
           ))}
         </div>
       </div>

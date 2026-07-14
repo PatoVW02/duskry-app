@@ -1,6 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  BILLING_CHECKOUT_KEYS,
+  BILLING_VARIANT_KEYS,
+  duplicateBillingVariantIds,
+  invalidBillingCheckoutUrls,
+  invalidBillingVariantIds,
+  productionBillingMismatches,
+} from './config-validation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -47,11 +55,26 @@ if (webBilling !== nativeBilling) errors.push('VITE_BILLING_PLANS_ENABLED and DU
 
 if (webBilling === 'true') {
   for (const key of [
-    'VITE_CHECKOUT_PRO_MONTHLY', 'VITE_CHECKOUT_PRO_YEARLY',
-    'VITE_CHECKOUT_PROPLUS_MONTHLY', 'VITE_CHECKOUT_PROPLUS_YEARLY',
-    'DUSKRY_VARIANT_PRO_MONTHLY', 'DUSKRY_VARIANT_PRO_YEARLY',
-    'DUSKRY_VARIANT_PROPLUS_MONTHLY', 'DUSKRY_VARIANT_PROPLUS_YEARLY',
+    ...BILLING_CHECKOUT_KEYS,
+    ...BILLING_VARIANT_KEYS,
   ]) if (!env[key]) errors.push(`Missing required billing variable: ${key}`);
+
+  for (const key of invalidBillingVariantIds(env)) {
+    errors.push(`${key} must be a positive decimal Lemon Squeezy variant ID, not a checkout URL or UUID`);
+  }
+  for (const key of duplicateBillingVariantIds(env)) {
+    errors.push(`${key} duplicates another plan variant ID`);
+  }
+  for (const key of invalidBillingCheckoutUrls(env)) {
+    errors.push(`${key} must be a reusable HTTPS checkout URL for the duskry.lemonsqueezy.com store`);
+  }
+
+  const productionBuild = process.argv.includes('--production') || process.argv.includes('--release-mac');
+  if (productionBuild) {
+    for (const key of productionBillingMismatches(env)) {
+      errors.push(`${key} does not match the verified live production billing configuration`);
+    }
+  }
 }
 
 if (process.argv.includes('--release-mac')) {

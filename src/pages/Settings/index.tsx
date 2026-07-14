@@ -87,6 +87,9 @@ function AboutTab() {
   const hasDownloadedUpdate = status.state === 'downloaded';
   const isUpToDate = status.state === 'upToDate';
   const hasError = status.state === 'error';
+  const retryMessage = status.state === 'available' || status.state === 'downloaded'
+    ? status.message
+    : undefined;
 
   return (
     <div className="glass-card" style={{ padding: '24px' }}>
@@ -144,6 +147,12 @@ function AboutTab() {
             Version {(status as { state: 'downloaded'; version: string }).version} is downloaded and ready to install
           </div>
         )}
+        {retryMessage && (
+          <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, lineHeight: 1.45, color: 'rgba(255,120,120,0.9)' }}>
+            <AlertCircle size={14} style={{ marginTop: 2, flexShrink: 0 }} />
+            <span>{retryMessage} You can retry below.</span>
+          </div>
+        )}
         {isDownloading && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>
@@ -170,7 +179,7 @@ function AboutTab() {
             disabled={isDownloading}
           >
             <Download size={13} />
-            {hasDownloadedUpdate ? 'Restart to Update' : 'Install &amp; Restart'}
+            {hasDownloadedUpdate ? 'Restart to Update' : 'Install & Restart'}
           </button>
         ) : (
           <button

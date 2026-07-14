@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import { BarChart3, CalendarDays, FolderOpen, ListChecks, Settings, WandSparkles } from 'lucide-react';
 import logo from '../../assets/logo.png';
+import { lockedFreeProjectIds } from '../../lib/projectAccess';
+import { targetableProjects } from '../../lib/projectTargets';
+import { isPro, useLicenseStore } from '../../stores/useLicenseStore';
 import { useProjectStore } from '../../stores/useProjectStore';
 // dragState window events ('duskry-drag-start', 'duskry-drag-end', 'duskry-drag-hover')
 // are used in useEffect below to drive isDragging / dragOver state.
@@ -24,9 +27,18 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
 
 export function Sidebar({ activePage, onNavigate }: Props) {
   const projects    = useProjectStore((s) => s.projects);
+  const tier        = useLicenseStore((s) => s.tier);
   const [dragOver,      setDragOver]      = useState<number | null>(null);
   const [isDragging,    setIsDragging]    = useState(false);
   const [appVersion,    setAppVersion]    = useState<string>('');
+  const lockedProjectIds = useMemo(
+    () => isPro(tier) ? new Set<number>() : lockedFreeProjectIds(projects),
+    [projects, tier],
+  );
+  const dragTargetProjects = useMemo(
+    () => targetableProjects(projects, lockedProjectIds),
+    [lockedProjectIds, projects],
+  );
 
   useEffect(() => { getVersion().then(setAppVersion); }, []);
 
@@ -69,10 +81,10 @@ export function Sidebar({ activePage, onNavigate }: Props) {
           </button>
         ))}
 
-        {isDragging && projects.length > 0 && (
+        {isDragging && dragTargetProjects.length > 0 && (
           <>
             <div className="nav-section-label">Assign to</div>
-            {projects.slice(0, 8).map((p) => {
+            {dragTargetProjects.slice(0, 8).map((p) => {
               const isOver = dragOver === p.id;
               return (
                 <button

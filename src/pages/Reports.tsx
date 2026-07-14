@@ -7,9 +7,10 @@ import {
 } from 'date-fns';
 import { useProjectStore } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
-import { formatDuration, isDeepWorkActivity } from '../lib/utils';
+import { errorMessage, formatDuration, isDeepWorkActivity } from '../lib/utils';
 import { ChartNoAxesCombined } from 'lucide-react';
 import type { Activity } from '../stores/useActivityStore';
+import { activitySecondsByHour, safeCsvCell } from '../lib/reportExport';
 
 // ── Range helpers ──────────────────────────────────────────────────────────
 
@@ -147,28 +148,67 @@ export function Reports({ onUpgrade }: { onUpgrade: () => void }) {
   const [prevActs, setPrevActs]     = useState<Activity[]>([]);
   const [heatActs, setHeatActs]     = useState<Activity[]>([]);
   const [loading, setLoading]       = useState(false);
+  const [loadError, setLoadError]   = useState<string | null>(null);
+  const [loadedRange, setLoadedRange] = useState<RangeKey | null>(null);
+  const [rangeReloadKey, setRangeReloadKey] = useState(0);
   const [exportMsg, setExportMsg]   = useState<string | null>(null);
   const [tip, setTip]               = useState<TooltipState | null>(null);
+  const rangeRequestIdRef = useRef(0);
 
   const showTip = (e: React.MouseEvent, text: string) => setTip({ text, x: e.clientX, y: e.clientY });
   const moveTip = (e: React.MouseEvent) => setTip((t) => t ? { ...t, x: e.clientX, y: e.clientY } : null);
   const hideTip = () => setTip(null);
 
   useEffect(() => {
+    const requestId = ++rangeRequestIdRef.current;
+    let cancelled = false;
     const { from, to }         = getRangeBounds(range);
     const { from: pf, to: pt } = getPrevRangeBounds(range);
     setLoading(true);
-    Promise.all([
+    setLoadError(null);
+    setLoadedRange(null);
+    setExportMsg(null);
+    setActivities([]);
+    setPrevActs([]);
+    void Promise.all([
       invoke<Activity[]>('get_activities_for_date', { fromTs: Math.floor(from.getTime() / 1000), toTs: Math.floor(to.getTime() / 1000) }),
       invoke<Activity[]>('get_activities_for_date', { fromTs: Math.floor(pf.getTime() / 1000),   toTs: Math.floor(pt.getTime() / 1000) }),
-    ]).then(([curr, prev]) => { setActivities(curr); setPrevActs(prev); }).finally(() => setLoading(false));
-  }, [range]);
+    ])
+      .then(([curr, prev]) => {
+        if (cancelled || requestId !== rangeRequestIdRef.current) return;
+        setActivities(curr);
+        setPrevActs(prev);
+        setLoadedRange(range);
+      })
+      .catch((error: unknown) => {
+        if (cancelled || requestId !== rangeRequestIdRef.current) return;
+        setLoadError(errorMessage(error, 'This report could not be loaded.'));
+      })
+      .finally(() => {
+        if (cancelled || requestId !== rangeRequestIdRef.current) return;
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [range, rangeReloadKey]);
 
   useEffect(() => {
-    invoke<Activity[]>('get_activities_for_date', {
+    let cancelled = false;
+    void invoke<Activity[]>('get_activities_for_date', {
       fromTs: Math.floor(startOfDay(subDays(new Date(), 83)).getTime() / 1000),
       toTs:   Math.floor(endOfDay(new Date()).getTime() / 1000),
-    }).then(setHeatActs);
+    })
+      .then((data) => {
+        if (!cancelled) setHeatActs(data);
+      })
+      .catch(() => {
+        if (!cancelled) setHeatActs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Paywall
@@ -247,11 +287,7 @@ export function Reports({ onUpgrade }: { onUpgrade: () => void }) {
 
   // ── Hourly distribution ───────────────────────────────────────────────────
 
-  const hourMap = Array(24).fill(0) as number[];
-  for (const a of activities) {
-    if (!a.duration_s) continue;
-    hourMap[new Date(a.started_at * 1000).getHours()] += a.duration_s;
-  }
+  const hourMap = activitySecondsByHour(activities);
   const workHours   = Array.from({ length: 18 }, (_, i) => i + 5); // 5 am – 10 pm
   const maxHourSecs = Math.max(...workHours.map((h) => hourMap[h]), 1);
 
@@ -290,27 +326,34 @@ export function Reports({ onUpgrade }: { onUpgrade: () => void }) {
 
   // ── Export ────────────────────────────────────────────────────────────────
 
+  const canExport = !loading && !loadError && loadedRange === range;
+
   const handleExport = async (type: 'csv' | 'json') => {
     setExportMsg(null);
+    if (!canExport) {
+      setExportMsg(loadError ? 'Reload the report before exporting' : 'Wait for the report to finish loading');
+      return;
+    }
+    const activitySnapshot = [...activities];
     const slug    = RANGES.find((r) => r.key === range)!.label.toLowerCase().replace(' ', '-');
     const dateStr = format(today, 'yyyy-MM-dd');
     try {
       let content: string;
       let filename: string;
       if (type === 'csv') {
-        const rows = activities.map((a) => [
+        const rows = activitySnapshot.map((a) => [
           format(new Date(a.started_at * 1000), 'yyyy-MM-dd'),
-          `"${a.app_name.replace(/"/g, '""')}"`,
-          `"${(a.window_title ?? '').replace(/"/g, '""')}"`,
+          safeCsvCell(a.app_name),
+          safeCsvCell(a.window_title ?? ''),
           new Date(a.started_at * 1000).toISOString(),
           a.ended_at ? new Date(a.ended_at * 1000).toISOString() : '',
           a.duration_s ? (a.duration_s / 60).toFixed(1) : '',
-          `"${a.project_id && projectMap[a.project_id] ? projectMap[a.project_id].name : 'Unassigned'}"`,
+          safeCsvCell(a.project_id && projectMap[a.project_id] ? projectMap[a.project_id].name : 'Unassigned'),
         ].join(','));
         content  = ['Date,App,Window Title,Started At,Ended At,Duration (min),Project', ...rows].join('\n');
         filename = `duskry-${slug}-${dateStr}.csv`;
       } else {
-        content  = JSON.stringify(activities.map((a) => ({
+        content  = JSON.stringify(activitySnapshot.map((a) => ({
           date:        format(new Date(a.started_at * 1000), 'yyyy-MM-dd'),
           app:         a.app_name,
           windowTitle: a.window_title ?? null,
@@ -322,10 +365,10 @@ export function Reports({ onUpgrade }: { onUpgrade: () => void }) {
         filename = `duskry-${slug}-${dateStr}.json`;
       }
       const path = await invoke<string>('save_file', { content, filename });
-      const parts = path.split('/');
+      const parts = path.split(/[\\/]/);
       setExportMsg(`Saved: ${parts[parts.length - 1]}`);
-    } catch {
-      setExportMsg('Export failed');
+    } catch (error: unknown) {
+      setExportMsg(errorMessage(error, 'Export failed'));
     }
   };
 
@@ -356,10 +399,36 @@ export function Reports({ onUpgrade }: { onUpgrade: () => void }) {
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {exportMsg && <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>{exportMsg}</span>}
-            <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => handleExport('csv')}>CSV</button>
-            <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => handleExport('json')}>JSON</button>
+            <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} disabled={!canExport} onClick={() => handleExport('csv')}>CSV</button>
+            <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} disabled={!canExport} onClick={() => handleExport('json')}>JSON</button>
           </div>
         </div>
+
+        {loadError && (
+          <div
+            role="alert"
+            className="glass-card"
+            style={{
+              padding: '10px 12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              color: 'rgba(251,113,133,0.88)',
+              fontSize: 12,
+            }}
+          >
+            <span>{loadError}</span>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ width: 'auto', padding: '5px 10px', fontSize: 11 }}
+              onClick={() => setRangeReloadKey((key) => key + 1)}
+            >
+              Try again
+            </button>
+          </div>
+        )}
 
         {/* Stats with period comparison */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>

@@ -1,5 +1,6 @@
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { useLicenseStore, isPro } from '../../stores/useLicenseStore';
+import { detectMacOS } from '../../lib/rulePlatform';
 
 const IDLE_OPTIONS: { label: string; value: number }[] = [
   { label: '1 min',   value: 60 },
@@ -10,6 +11,9 @@ const IDLE_OPTIONS: { label: string; value: number }[] = [
   { label: '30 min',  value: 1800 },
   { label: 'Never',   value: 86400 }, // 24 h ≈ never in practice
 ];
+
+const RUNNING_ON_MACOS = typeof navigator !== 'undefined'
+  && detectMacOS(navigator.platform, navigator.userAgent);
 
 export function Tracking({ onUpgrade }: { onUpgrade?: () => void }) {
   const {
@@ -81,8 +85,9 @@ export function Tracking({ onUpgrade }: { onUpgrade?: () => void }) {
             Built-in system rules
           </div>
           <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
-            Idle timeout is always available as a system rule. Meetings and video
-            playback are detected automatically and never interrupted.
+            {RUNNING_ON_MACOS
+              ? 'Idle timeout is always available as a system rule. Meetings and video playback are detected automatically and never interrupted.'
+              : 'Idle timeout is the built-in system rule available on Windows.'}
           </div>
         </div>
         <span style={{
@@ -104,17 +109,20 @@ export function Tracking({ onUpgrade }: { onUpgrade?: () => void }) {
       }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
-            App &amp; URL rules override focus project
+            {RUNNING_ON_MACOS ? 'Application & URL rules override focus project' : 'Rules override focus project'}
           </div>
           <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
-            When enabled, a rule matching the active app name or browser URL takes
-            priority over the focus project set from the menu bar.
+            {RUNNING_ON_MACOS
+              ? 'When enabled, a rule matching the active application or website takes priority over the focus project set from the menu bar. '
+              : 'When enabled, a rule matching the active application, window title, or file path takes priority over the focus project set from the menu bar. '}
             Disable this to make the menu bar focus project always win.
           </div>
         </div>
         <button
           role="switch"
-          aria-label="Allow app and website rules to override the focus project"
+          aria-label={RUNNING_ON_MACOS
+            ? 'Allow application and website rules to override the focus project'
+            : 'Allow matching rules to override the focus project'}
           aria-checked={rulesOverrideActive}
           onClick={() => setRulesOverrideActive(!rulesOverrideActive)}
           className={`toggle-switch${rulesOverrideActive ? ' on' : ''}`}
@@ -138,7 +146,9 @@ export function Tracking({ onUpgrade }: { onUpgrade?: () => void }) {
           </div>
           <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.42)', lineHeight: 1.6 }}>
             Duskry learns from your corrections and compares competing projects before acting.
-            Window titles, websites, and file paths never leave this device.
+            {RUNNING_ON_MACOS
+              ? ' Window titles, websites, and file paths never leave this device.'
+              : ' Window titles and file paths never leave this device.'}
           </div>
           {!ruleSuggestionsLocked && (
             <div style={{ fontSize: 11, color: 'rgba(45,212,191,0.62)', marginTop: 6, lineHeight: 1.5 }}>

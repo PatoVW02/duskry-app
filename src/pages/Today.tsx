@@ -26,8 +26,11 @@ import {
   type ActivityBurst,
   type BurstExpansionPreference,
 } from '../lib/activityBursts';
-import { formatDuration } from '../lib/utils';
+import { lockedFreeProjectIds } from '../lib/projectAccess';
+import { targetableProjects } from '../lib/projectTargets';
+import { errorMessage, formatDuration } from '../lib/utils';
 import { useActivityStore } from '../stores/useActivityStore';
+import { isPro, useLicenseStore } from '../stores/useLicenseStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import './Today.css';
 
@@ -133,20 +136,37 @@ function TimelineBlock({
 function AttentionCard({
   burst,
   projects,
+  targetProjects,
+  lockedProjectIds,
 }: {
   burst: ActivityBurst;
   projects: Project[];
+  targetProjects: Project[];
+  lockedProjectIds: ReadonlySet<number>;
 }) {
   const assignActivities = useActivityStore((state) => state.assignActivitiesToProject);
-  const [choosing, setChoosing] = useState(burst.suggestedProjectId == null);
-  const [selection, setSelection] = useState(String(burst.suggestedProjectId ?? ''));
+  const initialSuggestion = projectFor(targetProjects, burst.suggestedProjectId);
+  const [choosing, setChoosing] = useState(initialSuggestion == null);
+  const [selection, setSelection] = useState(String(initialSuggestion?.id ?? ''));
   const [saving, setSaving] = useState(false);
-  const suggested = projectFor(projects, burst.suggestedProjectId);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const suggested = projectFor(targetProjects, burst.suggestedProjectId);
+  const mustChoose = choosing || !suggested;
+  const selectedProjectId = Number(mustChoose ? selection : suggested.id);
+  const selectionAllowed = selectedProjectId > 0
+    && targetProjects.some((project) => project.id === selectedProjectId);
 
   const assign = async (projectId: number) => {
+    if (!targetProjects.some((project) => project.id === projectId)) {
+      setAssignmentError('That project is locked on the current plan. Choose an available project.');
+      return;
+    }
     setSaving(true);
+    setAssignmentError(null);
     try {
       await assignActivities(burst.activityIds, projectId);
+    } catch (error) {
+      setAssignmentError(errorMessage(error, 'This activity group could not be assigned.'));
     } finally {
       setSaving(false);
     }
@@ -164,7 +184,7 @@ function AttentionCard({
       <h3>{burst.appSummaries.map((summary) => summary.appName).slice(0, 2).join(' + ')}</h3>
       <p>{burst.primaryTitle || `${burst.switchCount} quick app switches need a project.`}</p>
 
-      {suggested && !choosing && (
+      {suggested && !mustChoose && (
         <div className="attention-card__suggestion">
           <span className="attention-card__suggestion-label">Suggested project</span>
           <strong><span style={{ background: suggested.color }} />{suggested.name}</strong>
@@ -172,37 +192,75 @@ function AttentionCard({
         </div>
       )}
 
-      {choosing && (
+      {mustChoose && (
         <label className="attention-card__picker">
           <span>Choose project</span>
-          <select value={selection} onChange={(event) => setSelection(event.target.value)} autoFocus>
+          <select
+            value={selectionAllowed ? selection : ''}
+            onChange={(event) => {
+              setSelection(event.target.value);
+              setAssignmentError(null);
+            }}
+            autoFocus
+            aria-invalid={assignmentError ? true : undefined}
+          >
             <option value="">Select a project…</option>
-            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            {projects.map((project) => (
+              <option
+                key={project.id}
+                value={project.id}
+                disabled={lockedProjectIds.has(project.id)}
+              >
+                {project.name}{lockedProjectIds.has(project.id) ? ' (locked)' : ''}
+              </option>
+            ))}
           </select>
         </label>
+      )}
+
+      {assignmentError && (
+        <p role="alert" style={{ margin: 0, color: 'rgba(248,113,113,0.92)', fontSize: 11 }}>
+          {assignmentError}
+        </p>
       )}
 
       <div className="attention-card__actions">
         <button
           type="button"
           className="today-button today-button--primary"
-          disabled={saving || (!selection && choosing)}
-          onClick={() => {
-            const projectId = Number(choosing ? selection : burst.suggestedProjectId);
-            if (projectId) void assign(projectId);
-          }}
+          disabled={saving || !selectionAllowed}
+          onClick={() => void assign(selectedProjectId)}
         >
           <Check size={13} /> {saving ? 'Assigning…' : 'Assign'}
         </button>
-        <button type="button" className="today-button today-button--quiet" onClick={() => setChoosing((value) => !value)}>
-          {choosing && suggested ? 'Use suggestion' : 'Choose another'}
-        </button>
+        {suggested && (
+          <button
+            type="button"
+            className="today-button today-button--quiet"
+            onClick={() => {
+              setChoosing((value) => !value);
+              setAssignmentError(null);
+            }}
+          >
+            {mustChoose ? 'Use suggestion' : 'Choose another'}
+          </button>
+        )}
       </div>
     </article>
   );
 }
 
-function LogTimeDialog({ projects, onClose }: { projects: Project[]; onClose: () => void }) {
+function LogTimeDialog({
+  projects,
+  targetProjects,
+  lockedProjectIds,
+  onClose,
+}: {
+  projects: Project[];
+  targetProjects: Project[];
+  lockedProjectIds: ReadonlySet<number>;
+  onClose: () => void;
+}) {
   const createManualActivity = useActivityStore((state) => state.createManualActivity);
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
@@ -210,6 +268,7 @@ function LogTimeDialog({ projects, onClose }: { projects: Project[]; onClose: ()
   const [start, setStart] = useState(format(new Date(), 'HH:mm'));
   const [minutes, setMinutes] = useState(30);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -239,19 +298,27 @@ function LogTimeDialog({ projects, onClose }: { projects: Project[]; onClose: ()
 
   const save = async () => {
     if (!title.trim() || minutes < 1 || saving) return;
+    const selectedProjectId = projectId ? Number(projectId) : null;
+    if (selectedProjectId !== null && !targetProjects.some((project) => project.id === selectedProjectId)) {
+      setSaveError('That project is locked on the current plan. Choose an available project or no project.');
+      return;
+    }
     const [hours, mins] = start.split(':').map(Number);
     const startedAt = new Date();
     startedAt.setHours(hours, mins, 0, 0);
     setSaving(true);
+    setSaveError(null);
     try {
       await createManualActivity(
         title.trim(),
         note.trim(),
-        projectId ? Number(projectId) : null,
+        selectedProjectId,
         Math.floor(startedAt.getTime() / 1000),
         minutes * 60,
       );
       onClose();
+    } catch (error) {
+      setSaveError(errorMessage(error, 'The manual activity could not be saved.'));
     } finally {
       setSaving(false);
     }
@@ -278,9 +345,24 @@ function LogTimeDialog({ projects, onClose }: { projects: Project[]; onClose: ()
         <div className="today-dialog__row">
           <label>
             <span>Project</span>
-            <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+            <select
+              value={targetProjects.some((project) => String(project.id) === projectId) ? projectId : ''}
+              onChange={(event) => {
+                setProjectId(event.target.value);
+                setSaveError(null);
+              }}
+              aria-invalid={saveError ? true : undefined}
+            >
               <option value="">No project</option>
-              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              {projects.map((project) => (
+                <option
+                  key={project.id}
+                  value={project.id}
+                  disabled={lockedProjectIds.has(project.id)}
+                >
+                  {project.name}{lockedProjectIds.has(project.id) ? ' (locked)' : ''}
+                </option>
+              ))}
             </select>
           </label>
           <label>
@@ -292,6 +374,11 @@ function LogTimeDialog({ projects, onClose }: { projects: Project[]; onClose: ()
             <input type="number" min={1} max={1440} value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} />
           </label>
         </div>
+        {saveError && (
+          <p role="alert" style={{ margin: 0, color: 'rgba(248,113,113,0.92)', fontSize: 11 }}>
+            {saveError}
+          </p>
+        )}
         <div className="today-dialog__actions">
           <button type="button" className="today-button today-button--quiet" onClick={onClose}>Cancel</button>
           <button type="button" className="today-button today-button--primary" onClick={() => void save()} disabled={!title.trim() || minutes < 1 || saving}>
@@ -310,8 +397,17 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
   const error = useActivityStore((state) => state.error);
   const fetchToday = useActivityStore((state) => state.fetchToday);
   const projects = useProjectStore((state) => state.projects);
+  const tier = useLicenseStore((state) => state.tier);
   const [openBurstId, setOpenBurstId] = useState<BurstExpansionPreference>(null);
   const [showLogTime, setShowLogTime] = useState(false);
+  const lockedProjectIds = useMemo(
+    () => isPro(tier) ? new Set<number>() : lockedFreeProjectIds(projects),
+    [projects, tier],
+  );
+  const targetProjects = useMemo(
+    () => targetableProjects(projects, lockedProjectIds),
+    [lockedProjectIds, projects],
+  );
 
   useEffect(() => {
     void fetchToday();
@@ -404,7 +500,15 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
                 <button type="button" className="today-button today-button--primary" onClick={onReview}>Review all ({attention.length}) <ChevronRight size={13} /></button>
               </div>
               <div className="attention-panel__list">
-                {attention.slice(0, 2).map((burst) => <AttentionCard key={burst.id} burst={burst} projects={projects} />)}
+                {attention.slice(0, 2).map((burst) => (
+                  <AttentionCard
+                    key={burst.id}
+                    burst={burst}
+                    projects={projects}
+                    targetProjects={targetProjects}
+                    lockedProjectIds={lockedProjectIds}
+                  />
+                ))}
               </div>
               <div className="attention-panel__footer">
                 {attention.length > 2
@@ -416,7 +520,14 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
         </aside>
       </div>
 
-      {showLogTime && <LogTimeDialog projects={projects} onClose={() => setShowLogTime(false)} />}
+      {showLogTime && (
+        <LogTimeDialog
+          projects={projects}
+          targetProjects={targetProjects}
+          lockedProjectIds={lockedProjectIds}
+          onClose={() => setShowLogTime(false)}
+        />
+      )}
     </div>
   );
 }

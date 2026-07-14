@@ -6,7 +6,8 @@ import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { PROJECT_COLORS } from '../styles/tokens';
 import { Plus, ChevronDown, ChevronRight, X, Target, Lock, Trash2 } from 'lucide-react';
-import { formatDuration } from '../lib/utils';
+import { errorMessage, formatDuration } from '../lib/utils';
+import { lockedFreeProjectIds } from '../lib/projectAccess';
 
 interface ActivityGroup {
   key: string;
@@ -96,28 +97,34 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
   // Projects beyond the free-tier limit (3) are locked — oldest 3 stay active.
   const lockedProjectIds = (() => {
     if (isPro(tier)) return new Set<number>();
-    const sorted = [...projects].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
-    return new Set(sorted.slice(3).map((p) => p.id as number));
+    return lockedFreeProjectIds(projects);
   })();
-
-  // Clear active focus project if it became locked after a downgrade.
-  useEffect(() => {
-    if (activeProjectId && lockedProjectIds.has(activeProjectId)) {
-      setActiveProject(0);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tier, activeProjectId]);
+  const activeProjectLocked = activeProjectId !== 0 && lockedProjectIds.has(activeProjectId);
 
   // ── project creation ───────────────────────────────
   const [showForm, setShowForm]   = useState(false);
   const [name, setName]           = useState('');
   const [color, setColor]         = useState(PROJECT_COLORS[0]);
   const [creating, setCreating]   = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [focusSaving, setFocusSaving] = useState(false);
 
   const [expandedActivitiesId, setExpandedActivitiesId] = useState<number | null>(null);
   const [expandedActivityGroups, setExpandedActivityGroups] = useState<Set<string>>(() => new Set());
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
+
+  // Clear the active focus project if it became locked after a downgrade.
+  useEffect(() => {
+    if (!activeProjectLocked) return;
+    setFocusSaving(true);
+    setProjectError(null);
+    void setActiveProject(0)
+      .catch((error: unknown) => {
+        setProjectError(errorMessage(error, 'The locked focus project could not be cleared.'));
+      })
+      .finally(() => setFocusSaving(false));
+  }, [activeProjectLocked, setActiveProject]);
 
   useEffect(() => {
     fetchForDate(viewDate);
@@ -128,25 +135,47 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
   }, [viewDate, fetchForDate]);
 
   const handleCreate = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || creating) return;
     setCreating(true);
-    await createProject(name.trim(), color);
-    setName('');
-    setColor(PROJECT_COLORS[0]);
-    setShowForm(false);
-    setCreating(false);
+    setProjectError(null);
+    try {
+      await createProject(name.trim(), color);
+      setName('');
+      setColor(PROJECT_COLORS[0]);
+      setShowForm(false);
+    } catch (error) {
+      setProjectError(errorMessage(error, 'The project could not be created.'));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleFocusProject = async (projectId: number) => {
+    if (focusSaving) return;
+    setFocusSaving(true);
+    setProjectError(null);
+    try {
+      await setActiveProject(projectId);
+    } catch (error) {
+      setProjectError(errorMessage(error, 'The focus project could not be updated.'));
+    } finally {
+      setFocusSaving(false);
+    }
   };
 
   const handleDeleteProject = async (projectId: number) => {
     setDeletingProjectId(projectId);
+    setProjectError(null);
     try {
       await deleteProject(projectId);
       if (activeProjectId === projectId) await setActiveProject(0);
       if (expandedActivitiesId === projectId) setExpandedActivitiesId(null);
       await fetchForDate(viewDate);
+      setDeleteConfirmId(null);
+    } catch (error) {
+      setProjectError(errorMessage(error, 'The project could not be deleted.'));
     } finally {
       setDeletingProjectId(null);
-      setDeleteConfirmId(null);
     }
   };
 
@@ -180,9 +209,11 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
             <span style={{ width: 9, height: 9, borderRadius: '50%', background: activeProject.color, flexShrink: 0 }} />
             <span style={{ fontSize: 13.5, fontWeight: 500, flex: 1 }}>{activeProject.name}</span>
             <button
-              onClick={() => setActiveProject(0)}
+              type="button"
+              onClick={() => void handleFocusProject(0)}
+              disabled={focusSaving}
               title="Clear focus"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.28)', display: 'flex', padding: 2 }}
+              style={{ background: 'none', border: 'none', cursor: focusSaving ? 'default' : 'pointer', color: 'rgba(255,255,255,0.28)', display: 'flex', padding: 2 }}
             >
               <X size={13} />
             </button>
@@ -204,7 +235,9 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
               return (
                 <button
                   key={pid}
-                  onClick={() => setActiveProject(isActive ? 0 : pid)}
+                  type="button"
+                  onClick={() => void handleFocusProject(isActive ? 0 : pid)}
+                  disabled={focusSaving}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6,
                     padding: '5px 11px', borderRadius: 999, cursor: 'pointer',
@@ -223,6 +256,32 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
           </div>
         )}
       </div>
+
+      {projectError && (
+        <div
+          role="alert"
+          className="glass-card"
+          style={{
+            padding: '10px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            color: 'rgba(248,113,113,0.9)',
+            fontSize: 12,
+          }}
+        >
+          <span>{projectError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss project error"
+            onClick={() => setProjectError(null)}
+            style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: 2 }}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
 
       {/* ── Projects ──────────────────────────────────── */}
       <div className="glass-card" style={{ padding: '20px 24px' }}>
@@ -270,7 +329,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
               placeholder="Project name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleCreate(); }}
               autoFocus
             />
             <div className="color-picker">
@@ -280,7 +339,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
               ))}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn-primary" onClick={handleCreate} disabled={creating || !name.trim()}>
+              <button type="button" className="btn-primary" onClick={() => void handleCreate()} disabled={creating || !name.trim()}>
                 {creating ? 'Creating…' : 'Create'}
               </button>
               <button className="btn-secondary" style={{ maxWidth: 100 }} onClick={() => setShowForm(false)}>
@@ -356,7 +415,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                               className="delete-confirm-button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleDeleteProject(pid);
+                                void handleDeleteProject(pid);
                               }}
                               disabled={deletingProjectId === pid}
                               style={{

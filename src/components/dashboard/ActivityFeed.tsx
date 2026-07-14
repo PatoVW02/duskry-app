@@ -1,9 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isToday } from 'date-fns';
 import { useActivityStore, type Activity } from '../../stores/useActivityStore';
+import { isPro, useLicenseStore } from '../../stores/useLicenseStore';
 import { useProjectStore, type Project } from '../../stores/useProjectStore';
-import { formatDuration } from '../../lib/utils';
+import { lockedFreeProjectIds } from '../../lib/projectAccess';
+import {
+  isProjectTargetAllowed,
+  projectTargetChoices,
+  type ProjectTargetChoice,
+} from '../../lib/projectTargets';
+import { errorMessage, formatDuration } from '../../lib/utils';
 import { format, fromUnixTime } from 'date-fns';
 import { Trash2, Plus, X } from 'lucide-react';
 import { Select } from '../ui/Select';
@@ -102,9 +109,18 @@ export function ActivityFeed() {
   const updateActivity  = useActivityStore((s) => s.updateActivity);
   const createManualActivity = useActivityStore((s) => s.createManualActivity);
   const projects        = useProjectStore((s) => s.projects);
+  const tier            = useLicenseStore((s) => s.tier);
 
   const isTodayView = isToday(viewDate);
   const unassigned = activities.filter((a) => !a.project_id);
+  const lockedProjectIds = useMemo(
+    () => isPro(tier) ? new Set<number>() : lockedFreeProjectIds(projects),
+    [projects, tier],
+  );
+  const projectChoices = useMemo(
+    () => projectTargetChoices(projects, lockedProjectIds),
+    [lockedProjectIds, projects],
+  );
 
   // ── edit state ─────────────────────────────────────────────────────────
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null);
@@ -127,9 +143,11 @@ export function ActivityFeed() {
   const [bulkPid,   setBulkPid]   = useState<number | null>(null);
 
   const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // ── edit handlers ───────────────────────────────────────────────────────
   const openEdit = (a: Activity) => {
+    setActionError(null);
     setEditingActivity(a);
     setEditTitle(displayAppName(a.app_name));
     setEditNote(a.window_title ?? '');
@@ -141,16 +159,23 @@ export function ActivityFeed() {
   const saveEdit = async () => {
     if (!editingActivity || saving) return;
     setSaving(true);
+    setActionError(null);
     const s = hhmmToTs(editingActivity.started_at, editStart);
     let   e = hhmmToTs(editingActivity.started_at, editEnd);
     if (e < s) e += 86400;
-    await updateActivity(editingActivity.id, editTitle.trim() || editingActivity.app_name, editNote.trim(), s, e);
-    setEditingActivity(null);
-    setSaving(false);
+    try {
+      await updateActivity(editingActivity.id, editTitle.trim() || editingActivity.app_name, editNote.trim(), s, e);
+      setEditingActivity(null);
+    } catch (error) {
+      setActionError(errorMessage(error, 'The activity could not be updated.'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── log time handlers ───────────────────────────────────────────────────
   const openLog = () => {
+    setActionError(null);
     setLogTitle(''); setLogNote(''); setLogProject(null);
     setLogStart(format(new Date(), 'HH:mm'));
     setLogHours(0); setLogMins(30);
@@ -161,23 +186,66 @@ export function ActivityFeed() {
     if (!logTitle.trim() || saving) return;
     const durationS = logHours * 3600 + logMins * 60;
     if (durationS < 60) return;
+    if (logProject !== null && !isProjectTargetAllowed(logProject, projects, lockedProjectIds)) {
+      setActionError('That project is locked on the current plan. Choose an available project or no project.');
+      return;
+    }
     setSaving(true);
+    setActionError(null);
     const today = new Date();
     const [h, m] = logStart.split(':').map(Number);
     today.setHours(h, m, 0, 0);
-    await createManualActivity(logTitle.trim(), logNote.trim(), logProject, Math.floor(today.getTime() / 1000), durationS);
-    setShowLog(false);
-    setSaving(false);
+    try {
+      await createManualActivity(logTitle.trim(), logNote.trim(), logProject, Math.floor(today.getTime() / 1000), durationS);
+      setShowLog(false);
+    } catch (error) {
+      setActionError(errorMessage(error, 'The manual activity could not be saved.'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── bulk-assign handler ─────────────────────────────────────────────────
   const doBulkAssign = async () => {
     if (!bulkPid || saving) return;
+    if (!isProjectTargetAllowed(bulkPid, projects, lockedProjectIds)) {
+      setActionError('That project is locked on the current plan. Choose an available project.');
+      setBulkPid(null);
+      return;
+    }
     setSaving(true);
-    await assignAllUnassignedToday(bulkPid);
-    setBulkOpen(false);
-    setBulkPid(null);
-    setSaving(false);
+    setActionError(null);
+    try {
+      await assignAllUnassignedToday(bulkPid);
+      setBulkOpen(false);
+      setBulkPid(null);
+    } catch (error) {
+      setActionError(errorMessage(error, 'The unassigned activity could not be assigned.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const assignActivity = async (activityId: number, projectId: number) => {
+    if (!isProjectTargetAllowed(projectId, projects, lockedProjectIds)) {
+      setActionError('That project is locked on the current plan. Choose an available project.');
+      return;
+    }
+    setActionError(null);
+    try {
+      await assignToProject(activityId, projectId);
+    } catch (error) {
+      setActionError(errorMessage(error, 'The activity could not be assigned.'));
+    }
+  };
+
+  const unassignActivity = async (activityId: number) => {
+    setActionError(null);
+    try {
+      await unassignFromProject(activityId);
+    } catch (error) {
+      setActionError(errorMessage(error, 'The project assignment could not be removed.'));
+    }
   };
 
   return (
@@ -196,6 +264,34 @@ export function ActivityFeed() {
         </button>
       </div>
 
+      {actionError && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 10,
+            padding: '7px 10px',
+            border: '0.5px solid rgba(248,113,113,0.28)',
+            borderRadius: 7,
+            color: 'rgba(254,202,202,0.9)',
+            background: 'rgba(127,29,29,0.14)',
+            fontSize: 11,
+          }}
+        >
+          <span style={{ flex: 1 }}>{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            aria-label="Dismiss activity error"
+            style={{ display: 'flex', padding: 2, border: 0, color: 'inherit', background: 'none', cursor: 'pointer' }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       {/* ── Bulk-assign bar (today only) ─────────────────────────────────── */}
       {isTodayView && unassigned.length > 0 && (
         <div style={{ marginBottom: 10, padding: '7px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.03)', border: '0.5px dashed rgba(255,255,255,0.11)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -207,7 +303,11 @@ export function ActivityFeed() {
               <Select
                 value={String(bulkPid ?? '')}
                 onChange={(v) => setBulkPid(v ? parseInt(v) : null)}
-                options={projects.map((p) => ({ value: String(p.id!), label: p.name }))}
+                options={projectChoices.map(({ project, label, disabled }) => ({
+                  value: String(project.id),
+                  label,
+                  disabled,
+                }))}
                 placeholder="Pick project…"
                 style={{ fontSize: 11.5 }}
               />
@@ -247,8 +347,9 @@ export function ActivityFeed() {
             key={a.id}
             activity={a}
             projects={projects}
-            onAssign={(pid) => assignToProject(a.id, pid)}
-            onUnassign={() => unassignFromProject(a.id)}
+            projectChoices={projectChoices}
+            onAssign={(pid) => assignActivity(a.id, pid)}
+            onUnassign={() => unassignActivity(a.id)}
             onEdit={() => openEdit(a)}
             onDelete={() => deleteActivity(a.id)}
           />
@@ -257,7 +358,7 @@ export function ActivityFeed() {
 
       {/* ── Edit modal ─────────────────────────────────────────────────── */}
       {editingActivity && (
-        <Modal title="Edit activity" onClose={() => setEditingActivity(null)}>
+        <Modal title="Edit activity" onClose={() => { setEditingActivity(null); setActionError(null); }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <FieldLabel>Title</FieldLabel>
             <input className="glass-input" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} style={{ fontSize: 13 }} autoFocus />
@@ -276,6 +377,11 @@ export function ActivityFeed() {
               <input type="time" className="glass-input" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums' }} />
             </div>
           </div>
+          {actionError && (
+            <div role="alert" style={{ fontSize: 11.5, color: 'rgba(248,113,113,0.92)', lineHeight: 1.45 }}>
+              {actionError}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn-primary" onClick={saveEdit} disabled={saving || !editTitle.trim()} style={{ fontSize: 12.5 }}>
               {saving ? 'Saving…' : 'Save changes'}
@@ -286,7 +392,11 @@ export function ActivityFeed() {
 
       {/* ── Log time modal ─────────────────────────────────────────────── */}
       {showLog && (
-        <Modal title="Log time" onClose={() => !saving && setShowLog(false)}>
+        <Modal title="Log time" onClose={() => {
+          if (saving) return;
+          setShowLog(false);
+          setActionError(null);
+        }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <FieldLabel>What were you working on?</FieldLabel>
             <input className="glass-input" value={logTitle} onChange={(e) => setLogTitle(e.target.value)} placeholder="Title" autoFocus style={{ fontSize: 13 }} onKeyDown={(e) => e.key === 'Enter' && saveLog()} />
@@ -302,7 +412,11 @@ export function ActivityFeed() {
               onChange={(v) => setLogProject(v ? parseInt(v) : null)}
               options={[
                 { value: '', label: 'No project' },
-                ...projects.map((p) => ({ value: String(p.id!), label: p.name })),
+                ...projectChoices.map(({ project, label, disabled }) => ({
+                  value: String(project.id),
+                  label,
+                  disabled,
+                })),
               ]}
               placeholder="No project"
             />
@@ -322,6 +436,11 @@ export function ActivityFeed() {
               </div>
             </div>
           </div>
+          {actionError && (
+            <div role="alert" style={{ fontSize: 11.5, color: 'rgba(248,113,113,0.92)', lineHeight: 1.45 }}>
+              {actionError}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn-primary" onClick={saveLog} disabled={saving || !logTitle.trim() || (logHours === 0 && logMins < 1)} style={{ fontSize: 12.5 }}>
               {saving ? 'Saving…' : 'Log time'}
@@ -337,6 +456,7 @@ export function ActivityFeed() {
 function ActivityRow({
   activity: a,
   projects,
+  projectChoices,
   onAssign,
   onUnassign,
   onEdit,
@@ -344,8 +464,9 @@ function ActivityRow({
 }: {
   activity: Activity;
   projects: Project[];
-  onAssign: (pid: number) => void;
-  onUnassign: () => void;
+  projectChoices: ProjectTargetChoice<Project>[];
+  onAssign: (pid: number) => Promise<void>;
+  onUnassign: () => Promise<void>;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -355,7 +476,11 @@ function ActivityRow({
   const time = format(fromUnixTime(a.started_at), 'HH:mm');
   const projectOptions = [
     { value: '', label: 'No project' },
-    ...projects.map((p: Project) => ({ value: String(p.id!), label: p.name })),
+    ...projectChoices.map(({ project, label, disabled }) => ({
+      value: String(project.id),
+      label,
+      disabled,
+    })),
   ];
 
   return (
@@ -386,7 +511,7 @@ function ActivityRow({
         <div data-no-edit="true" onClick={(e) => e.stopPropagation()}>
           <Select
             value={a.project_id ? String(a.project_id) : ''}
-            onChange={(v) => { if (v) onAssign(parseInt(v, 10)); else onUnassign(); }}
+            onChange={(v) => { void (v ? onAssign(parseInt(v, 10)) : onUnassign()); }}
             options={projectOptions}
             placeholder="Assign…"
             style={{

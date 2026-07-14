@@ -29,7 +29,7 @@ fn refresh_active_project_state() -> i64 {
     }
 
     let stored_day = db::get_setting("active_project_date").unwrap_or_default();
-    if stored_day == current_local_day_key() {
+    if stored_day == current_local_day_key() && validate_project_access(active_pid).is_ok() {
         tracker::ACTIVE_PROJECT_ID.store(active_pid, std::sync::atomic::Ordering::SeqCst);
         return active_pid;
     }
@@ -40,6 +40,53 @@ fn refresh_active_project_state() -> i64 {
     0
 }
 
+fn focus_project_limit() -> Option<i64> {
+    if !feature_flags::billing_plans_enabled() {
+        return None;
+    }
+    match license::get_effective_tier() {
+        license::AppTier::Free | license::AppTier::Expired => Some(3),
+        license::AppTier::ProTrial | license::AppTier::Pro | license::AppTier::ProPlus => None,
+    }
+}
+
+pub(crate) fn validate_project_access(project_id: i64) -> Result<(), String> {
+    if project_id == 0 {
+        return Ok(());
+    }
+    if project_id < 0
+        || !db::is_project_focus_eligible(project_id, None).map_err(|error| error.to_string())?
+    {
+        return Err("The selected project no longer exists.".to_string());
+    }
+    if !db::is_project_focus_eligible(project_id, focus_project_limit())
+        .map_err(|error| error.to_string())?
+    {
+        return Err(
+            "This project is locked on the Free plan. Select one of your first three projects or upgrade to Pro."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_assignment_project_access(project_id: i64) -> Result<(), String> {
+    if project_id <= 0 {
+        return Err("Select a project before assigning activity.".to_string());
+    }
+    validate_project_access(project_id)
+}
+
+fn enforce_active_project_access() {
+    let active_project_id = tracker::ACTIVE_PROJECT_ID.load(std::sync::atomic::Ordering::SeqCst);
+    if active_project_id <= 0 || validate_project_access(active_project_id).is_ok() {
+        return;
+    }
+    tracker::ACTIVE_PROJECT_ID.store(0, std::sync::atomic::Ordering::SeqCst);
+    let _ = db::set_setting("active_project_id", "0");
+    let _ = db::set_setting("active_project_date", "");
+}
+
 fn hide_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
@@ -48,6 +95,7 @@ fn hide_main_window(app: &tauri::AppHandle) {
 
 pub(crate) fn request_real_quit(app: &tauri::AppHandle) {
     REAL_QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    tracker::stop_tracking_for_exit();
     app.exit(0);
 }
 
@@ -123,6 +171,7 @@ fn assign_activities_internal(
     mut activity_ids: Vec<i64>,
     project_id: i64,
 ) -> Result<Vec<db::RuleSuggestion>, String> {
+    validate_assignment_project_access(project_id)?;
     let mut seen = std::collections::HashSet::new();
     activity_ids.retain(|activity_id| *activity_id > 0 && seen.insert(*activity_id));
     if activity_ids.is_empty() {
@@ -183,6 +232,7 @@ fn assign_activities_internal(
             let value = suggested_rule_value(&s.field, &s.operator, &s.value);
             let (field, operator) = suggested_rule_storage(&s.field, &s.operator);
             rules::validate_rule(field, operator, &value)?;
+            rules::validate_platform_capabilities(field, &value, cfg!(target_os = "macos"))?;
             let rule_id = db::create_rule_with_metadata(
                 s.project_id,
                 field,
@@ -249,6 +299,9 @@ fn create_manual_activity(
     started_at: i64,
     duration_s: i64,
 ) -> Result<(), String> {
+    if let Some(project_id) = project_id {
+        validate_assignment_project_access(project_id)?;
+    }
     db::create_manual_activity(&title, &note, project_id, started_at, duration_s)
         .map_err(|e| e.to_string())
 }
@@ -260,6 +313,7 @@ fn apply_rule_to_activities(rule_id: i64, from_ts: i64, to_ts: i64) -> Result<i3
         .iter()
         .find(|r| r.id == Some(rule_id))
         .ok_or_else(|| format!("Rule {} not found", rule_id))?;
+    validate_assignment_project_access(rule.project_id)?;
     let activities =
         db::get_unassigned_activities_in_range(from_ts, to_ts).map_err(|e| e.to_string())?;
     let mut count = 0i32;
@@ -305,6 +359,7 @@ fn apply_rule_to_activities(rule_id: i64, from_ts: i64, to_ts: i64) -> Result<i3
 
 #[tauri::command]
 fn assign_all_unassigned_today(project_id: i64) -> Result<i32, String> {
+    validate_assignment_project_access(project_id)?;
     db::assign_all_unassigned_today(project_id).map_err(|e| e.to_string())
 }
 
@@ -370,6 +425,7 @@ fn create_rule(
         return Err("Upgrade to Pro to create rules.".to_string());
     }
     rules::validate_rule(&field, &operator, &value)?;
+    rules::validate_platform_capabilities(&field, &value, cfg!(target_os = "macos"))?;
     db::create_rule(project_id, &field, &operator, &value, priority).map_err(|e| e.to_string())
 }
 
@@ -405,6 +461,11 @@ fn create_suggested_rule(
     let compound_value = suggested_rule_value(&field, &operator, &value);
     let (stored_field, stored_operator) = suggested_rule_storage(&field, &operator);
     rules::validate_rule(stored_field, stored_operator, &compound_value)?;
+    rules::validate_platform_capabilities(
+        stored_field,
+        &compound_value,
+        cfg!(target_os = "macos"),
+    )?;
     let rule_id = db::create_rule(
         project_id,
         stored_field,
@@ -570,19 +631,28 @@ fn get_license_status() -> license::LicenseStatus {
 }
 
 #[tauri::command]
-async fn refresh_license_tier() -> Result<String, String> {
-    let tier = license::refresh_license_online().await?;
+async fn refresh_license_tier(app: tauri::AppHandle) -> Result<String, String> {
+    let result = license::refresh_license_online().await;
+    enforce_active_project_access();
+    let _ = tray::rebuild_tray(&app);
+    let tier = result?;
     Ok(tier.as_str().to_string())
 }
 
 #[tauri::command]
-async fn refresh_license_status() -> license::LicenseStatus {
-    license::refresh_license_status().await
+async fn refresh_license_status(app: tauri::AppHandle) -> license::LicenseStatus {
+    let status = license::refresh_license_status().await;
+    enforce_active_project_access();
+    let _ = tray::rebuild_tray(&app);
+    status
 }
 
 #[tauri::command]
-async fn validate_license(key: String) -> Result<String, String> {
-    let tier = license::validate_license_online(&key).await?;
+async fn validate_license(app: tauri::AppHandle, key: String) -> Result<String, String> {
+    let result = license::validate_license_online(&key).await;
+    enforce_active_project_access();
+    let _ = tray::rebuild_tray(&app);
+    let tier = result?;
     Ok(tier.as_str().to_string())
 }
 
@@ -592,13 +662,15 @@ fn can_deactivate_license() -> bool {
 }
 
 #[tauri::command]
-async fn remove_license() -> Result<String, String> {
+async fn remove_license(app: tauri::AppHandle) -> Result<String, String> {
     let tier = license::remove_license_online().await?;
+    enforce_active_project_access();
+    let _ = tray::rebuild_tray(&app);
     Ok(tier.as_str().to_string())
 }
 
 #[tauri::command]
-fn start_trial(email: String) -> Result<i64, String> {
+fn start_trial(app: tauri::AppHandle, email: String) -> Result<i64, String> {
     let already_started = db::get_setting("trial_started_at")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0)
@@ -613,20 +685,27 @@ fn start_trial(email: String) -> Result<i64, String> {
     db::set_setting("trial_started_at", &started_at.to_string()).map_err(|e| e.to_string())?;
     db::set_setting("trial_expires_at", &expires_at.to_string()).map_err(|e| e.to_string())?;
     db::set_setting("trial_status", "active").map_err(|e| e.to_string())?;
+    let _ = tray::rebuild_tray(&app);
     Ok(expires_at)
 }
 
 #[tauri::command]
-fn cancel_trial() -> Result<(), String> {
+fn cancel_trial(app: tauri::AppHandle) -> Result<(), String> {
     // Cancelling the trial switches to the permanent Free plan. It should not
     // route the user into the expired-trial paywall.
-    db::set_setting("trial_status", "downgraded").map_err(|e| e.to_string())
+    db::set_setting("trial_status", "downgraded").map_err(|e| e.to_string())?;
+    enforce_active_project_access();
+    let _ = tray::rebuild_tray(&app);
+    Ok(())
 }
 
 #[tauri::command]
-fn downgrade_to_free() -> Result<(), String> {
+fn downgrade_to_free(app: tauri::AppHandle) -> Result<(), String> {
     // "downgraded" is not matched by any paid/expired case → get_effective_tier() returns Free
-    db::set_setting("trial_status", "downgraded").map_err(|e| e.to_string())
+    db::set_setting("trial_status", "downgraded").map_err(|e| e.to_string())?;
+    enforce_active_project_access();
+    let _ = tray::rebuild_tray(&app);
+    Ok(())
 }
 
 // ─── Permissions commands ───────────────────────────────────────────────────
@@ -678,6 +757,7 @@ fn get_active_project() -> i64 {
 /// project_id = 0 clears the focus.
 #[tauri::command]
 fn set_active_project(app: tauri::AppHandle, project_id: i64) -> Result<(), String> {
+    validate_project_access(project_id)?;
     tracker::ACTIVE_PROJECT_ID.store(project_id, std::sync::atomic::Ordering::SeqCst);
     db::set_setting("active_project_id", &project_id.to_string()).map_err(|e| e.to_string())?;
     let active_project_date = if project_id > 0 {
@@ -732,10 +812,34 @@ fn request_notification_permission() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn notify_update_ready(version: String) -> Result<(), String> {
+    let version = version.trim();
+    if !notify::valid_update_version(version) {
+        return Err("The update version is invalid.".to_string());
+    }
+    let notifications_enabled = db::get_setting("notifications_enabled")
+        .map(|value| value == "true")
+        .unwrap_or(false);
+    if !notifications_enabled {
+        return Ok(());
+    }
+    notify::send_notification(
+        &format!("Duskry {version} is ready"),
+        "Open Settings > About and restart when you are ready.",
+    );
+    Ok(())
+}
+
+#[tauri::command]
 fn get_notifications_enabled() -> bool {
     db::get_setting("notifications_enabled")
         .map(|v| v == "true")
         .unwrap_or(false)
+}
+
+#[tauri::command]
+fn get_database_startup_error() -> Option<String> {
+    db::startup_error()
 }
 
 // ─── URL opener ─────────────────────────────────────────────────────────────
@@ -802,8 +906,6 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -892,7 +994,9 @@ pub fn run() {
             get_rules_override,
             set_rules_override,
             request_notification_permission,
+            notify_update_ready,
             get_notifications_enabled,
+            get_database_startup_error,
             save_file,
             get_tracker_log,
             get_tracker_log_path,

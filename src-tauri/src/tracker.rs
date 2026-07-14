@@ -27,10 +27,13 @@ static SUPPORT_THREADS_STARTED: AtomicBool = AtomicBool::new(false);
 static WATCHDOG_RUNNING: AtomicBool = AtomicBool::new(false);
 static TRACKER_HEARTBEAT_TS: AtomicI64 = AtomicI64::new(0);
 static CURRENT_ACTIVITY_ID: AtomicI64 = AtomicI64::new(0);
+static LAST_TRUSTWORTHY_OBSERVATION_TS: AtomicI64 = AtomicI64::new(0);
 static WORKER_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 const WATCHDOG_INTERVAL_SECS: u64 = 60;
 const TRACKER_STALE_AFTER_SECS: i64 = 90;
+const MAX_TRACKER_GAP_SECS: i64 = 30;
+const MAX_CONSECUTIVE_WINDOW_MISSES: u32 = 2;
 
 /// The project set by the menu bar "focus" selector. 0 = none.
 pub static ACTIVE_PROJECT_ID: AtomicI64 = AtomicI64::new(0);
@@ -57,21 +60,27 @@ fn current_local_day_key() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-fn active_project_for_today() -> i64 {
+fn active_project_for_today(enforce_free_project_limit: bool) -> i64 {
     let active_pid = ACTIVE_PROJECT_ID.load(Ordering::SeqCst);
     if active_pid <= 0 {
         return 0;
     }
 
     let stored_day = crate::db::get_setting("active_project_date").unwrap_or_default();
-    if stored_day == current_local_day_key() {
+    let project_still_available =
+        !enforce_free_project_limit || crate::validate_project_access(active_pid).is_ok();
+    if stored_day == current_local_day_key() && project_still_available {
         return active_pid;
     }
 
     ACTIVE_PROJECT_ID.store(0, Ordering::SeqCst);
     let _ = crate::db::set_setting("active_project_id", "0");
     let _ = crate::db::set_setting("active_project_date", "");
-    crate::logger::tlog("Focus project reset for a new local day");
+    crate::logger::tlog(if project_still_available {
+        "Focus project reset for a new local day"
+    } else {
+        "Focus project reset because it is locked on the current plan"
+    });
     0
 }
 
@@ -84,6 +93,51 @@ pub fn start_tracking_loop() {
     start_support_threads_once();
     start_watchdog_once();
     start_tracking_worker();
+}
+
+fn observation_gap_exceeded(previous_tick: i64, current_tick: i64) -> bool {
+    previous_tick > 0
+        && (current_tick < previous_tick
+            || current_tick.saturating_sub(previous_tick) > MAX_TRACKER_GAP_SECS)
+}
+
+fn should_end_attribution_after_misses(misses: u32) -> bool {
+    misses >= MAX_CONSECUTIVE_WINDOW_MISSES
+}
+
+fn discontinuity_end_at(previous_tick: i64, current_tick: i64, last_observed: i64) -> i64 {
+    if current_tick < previous_tick {
+        current_tick
+    } else {
+        last_observed
+    }
+}
+
+fn finish_current_activity_at(end_at: i64, reason: &str) {
+    let activity_id = CURRENT_ACTIVITY_ID.swap(0, Ordering::SeqCst);
+    if activity_id <= 0 {
+        return;
+    }
+    let safe_end_at = end_at.max(0);
+    match crate::db::finish_activity(activity_id, safe_end_at) {
+        Ok(()) => crate::logger::tlog(&format!(
+            "  Finished activity #{} at last observation ({})",
+            activity_id, reason
+        )),
+        Err(error) => crate::logger::tlog(&format!(
+            "  Could not finish activity #{} during {}: {}",
+            activity_id, reason, error
+        )),
+    }
+}
+
+/// Stop attribution synchronously before a real process exit. The last window
+/// observation, rather than the exit wall clock, is the trustworthy boundary.
+pub fn stop_tracking_for_exit() {
+    WORKER_GENERATION.fetch_add(1, Ordering::SeqCst);
+    RUNNING.store(false, Ordering::SeqCst);
+    let last_observed = LAST_TRUSTWORTHY_OBSERVATION_TS.load(Ordering::SeqCst);
+    finish_current_activity_at(last_observed, "application exit");
 }
 
 fn start_support_threads_once() {
@@ -192,7 +246,10 @@ fn start_tracking_worker() {
     let now = Utc::now().timestamp();
     let prev_id = CURRENT_ACTIVITY_ID.swap(0, Ordering::SeqCst);
     if prev_id > 0 {
-        let _ = crate::db::finish_activity(prev_id, now);
+        let recovery_end = LAST_TRUSTWORTHY_OBSERVATION_TS
+            .load(Ordering::SeqCst)
+            .max(0);
+        let _ = crate::db::finish_activity(prev_id, recovery_end);
         crate::logger::tlog(&format!(
             "  Finished stale activity #{} before tracker start",
             prev_id
@@ -214,15 +271,8 @@ fn start_tracking_worker() {
             tracking_worker_loop(generation);
         }));
         if WORKER_GENERATION.load(Ordering::SeqCst) == generation {
-            let prev_id = CURRENT_ACTIVITY_ID.swap(0, Ordering::SeqCst);
-            if prev_id > 0 {
-                let now = Utc::now().timestamp();
-                let _ = crate::db::finish_activity(prev_id, now);
-                crate::logger::tlog(&format!(
-                    "  Finished activity #{} because tracker worker exited",
-                    prev_id
-                ));
-            }
+            let last_observed = LAST_TRUSTWORTHY_OBSERVATION_TS.load(Ordering::SeqCst);
+            finish_current_activity_at(last_observed, "tracker worker exit");
             RUNNING.store(false, Ordering::SeqCst);
         }
         if result.is_err() {
@@ -247,6 +297,8 @@ fn tracking_worker_loop(generation: u64) {
     let mut last_heartbeat = Utc::now().timestamp();
     let mut prev_idle_secs: i64 = -1;
     let mut tick_count: u64 = 0;
+    let mut previous_tick_ts = Utc::now().timestamp();
+    let mut consecutive_window_misses = 0_u32;
 
     crate::logger::tlog(&format!(
         "Tracker worker #{} started (idle_threshold={}s, tick=5s)",
@@ -262,7 +314,26 @@ fn tracking_worker_loop(generation: u64) {
             ));
             break;
         }
-        TRACKER_HEARTBEAT_TS.store(Utc::now().timestamp(), Ordering::SeqCst);
+        let tick_ts = Utc::now().timestamp();
+        TRACKER_HEARTBEAT_TS.store(tick_ts, Ordering::SeqCst);
+
+        // Threads are suspended while the computer sleeps. Never bridge a
+        // large wall-clock gap onto the activity that happened before sleep.
+        if observation_gap_exceeded(previous_tick_ts, tick_ts) {
+            let last_observed = LAST_TRUSTWORTHY_OBSERVATION_TS.load(Ordering::SeqCst);
+            let end_at = discontinuity_end_at(previous_tick_ts, tick_ts, last_observed);
+            finish_current_activity_at(end_at, "sleep or clock discontinuity");
+            last = None;
+            consecutive_window_misses = 0;
+            if let Ok(mut guard) = last_window_cache().lock() {
+                *guard = None;
+            }
+            crate::logger::tlog(&format!(
+                "Tracker gap detected ({}s); starting fresh attribution",
+                tick_ts.saturating_sub(previous_tick_ts)
+            ));
+        }
+        previous_tick_ts = tick_ts;
 
         // ── Pause check ──────────────────────────────────────────
         if TRACKING_PAUSED.load(Ordering::SeqCst) {
@@ -358,6 +429,7 @@ fn tracking_worker_loop(generation: u64) {
         }
 
         if let Some(mut current) = get_active_window() {
+            consecutive_window_misses = 0;
             if WORKER_GENERATION.load(Ordering::SeqCst) != generation {
                 crate::logger::tlog(&format!(
                     "Tracker worker #{} exiting after stale window check",
@@ -437,6 +509,7 @@ fn tracking_worker_loop(generation: u64) {
                 let prev_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
                 if prev_id > 0 {
                     let _ = crate::db::finish_activity(prev_id, now);
+                    CURRENT_ACTIVITY_ID.store(0, Ordering::SeqCst);
                     let duration = last.as_ref().map(|w| now - w.timestamp).unwrap_or(0);
                     crate::logger::tlog(&format!(
                         "  Finished activity #{} ({}s)",
@@ -486,6 +559,7 @@ fn tracking_worker_loop(generation: u64) {
                     Ok(new_id) => {
                         crate::logger::tlog(&format!("  Started activity #{}", new_id));
                         CURRENT_ACTIVITY_ID.store(new_id, Ordering::SeqCst);
+                        LAST_TRUSTWORTHY_OBSERVATION_TS.store(now, Ordering::SeqCst);
 
                         // ── Daily focus notification ──────────────────
                         if crate::notify::should_send_daily_notification() {
@@ -524,17 +598,37 @@ fn tracking_worker_loop(generation: u64) {
                         crate::logger::tlog(&format!("  DB error saving activity: {}", e));
                     }
                 }
+            } else {
+                let observed_at = Utc::now().timestamp();
+                let activity_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
+                if activity_id > 0 {
+                    if let Err(error) = crate::db::checkpoint_activity(activity_id, observed_at) {
+                        crate::logger::tlog(&format!(
+                            "  DB error checkpointing activity #{}: {}",
+                            activity_id, error
+                        ));
+                    } else {
+                        LAST_TRUSTWORTHY_OBSERVATION_TS.store(observed_at, Ordering::SeqCst);
+                    }
+                }
             }
         } else {
-            // osascript returned None — timeout or system not ready
+            // The OS could not safely identify the foreground process. This is
+            // common for elevated Windows processes and transient macOS AX timeouts.
             crate::logger::tlog(&format!(
-                "  tick: osascript returned None  idle={}s  activity=#{}",
+                "  tick: foreground window unavailable  idle={}s  activity=#{}",
                 idle_secs,
                 CURRENT_ACTIVITY_ID.load(Ordering::SeqCst)
             ));
             // Window gone (idle handled above) — clear cache
             if let Ok(mut guard) = last_window_cache().lock() {
                 *guard = None;
+            }
+            consecutive_window_misses = consecutive_window_misses.saturating_add(1);
+            if should_end_attribution_after_misses(consecutive_window_misses) {
+                let last_observed = LAST_TRUSTWORTHY_OBSERVATION_TS.load(Ordering::SeqCst);
+                finish_current_activity_at(last_observed, "foreground window unavailable");
+                last = None;
             }
         }
     }
@@ -613,7 +707,10 @@ fn determine_project(
     let rules_locked = crate::feature_flags::billing_plans_enabled()
         && (tier == crate::license::AppTier::Free || tier == crate::license::AppTier::Expired);
 
-    let active_pid = active_project_for_today();
+    // Trial expiry can happen while the app stays open. Re-check a stored
+    // focus as soon as the effective tier becomes Free/Expired so a locked
+    // fourth project cannot keep receiving activity until the next UI refresh.
+    let active_pid = active_project_for_today(rules_locked);
 
     if active_pid > 0 {
         // Free/Expired: rules don't apply, focus project always wins
@@ -833,10 +930,11 @@ fn get_browser_url(app_name: &str) -> (bool, Option<String>) {
 
 #[cfg(target_os = "windows")]
 pub fn get_active_window() -> Option<ActiveWindow> {
+    use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
     use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
@@ -854,10 +952,20 @@ pub fn get_active_window() -> Option<ActiveWindow> {
 
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        let proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?;
-        let mut path_buf = [0u16; 512];
-        let path_len = GetModuleFileNameExW(proc, None, &mut path_buf);
+        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        // QueryFullProcessImageNameW only needs limited query access. The old
+        // GetModuleFileNameExW + VM_READ path failed for many sandboxed/UWP
+        // apps and elevated foreground processes, dropping their activity.
+        let mut path_buf = [0u16; 32_768];
+        let mut path_len = path_buf.len() as u32;
+        let path_result = QueryFullProcessImageNameW(
+            proc,
+            PROCESS_NAME_WIN32,
+            PWSTR(path_buf.as_mut_ptr()),
+            &mut path_len,
+        );
         let _ = CloseHandle(proc);
+        path_result.ok()?;
         let full_path = String::from_utf16_lossy(&path_buf[..path_len as usize]);
         let app_name = std::path::Path::new(&full_path)
             .file_stem()
@@ -1026,6 +1134,30 @@ fn is_engaged() -> bool {
 #[cfg(not(target_os = "macos"))]
 fn is_engaged() -> bool {
     false
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{
+        discontinuity_end_at, observation_gap_exceeded, should_end_attribution_after_misses,
+    };
+
+    #[test]
+    fn a_large_tick_gap_starts_a_new_attribution_window() {
+        assert!(!observation_gap_exceeded(100, 130));
+        assert!(observation_gap_exceeded(100, 131));
+        assert!(observation_gap_exceeded(100, 99));
+        assert!(!observation_gap_exceeded(0, 10_000));
+        assert_eq!(discontinuity_end_at(100, 131, 100), 100);
+        assert_eq!(discontinuity_end_at(100, 99, 100), 99);
+    }
+
+    #[test]
+    fn transient_window_failures_are_tolerated_but_repeated_failures_end_attribution() {
+        assert!(!should_end_attribution_after_misses(1));
+        assert!(should_end_attribution_after_misses(2));
+        assert!(should_end_attribution_after_misses(20));
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]

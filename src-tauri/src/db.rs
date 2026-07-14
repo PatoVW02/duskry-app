@@ -2,20 +2,57 @@ use chrono::TimeZone;
 use once_cell::sync::Lazy;
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+static DB_INIT_ERROR: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 static DB: Lazy<Mutex<Connection>> = Lazy::new(|| {
     let path = get_db_path();
-    let conn = Connection::open(&path).expect("Failed to open database");
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .expect("Failed to enable foreign keys");
-    init_schema(&conn).expect("Failed to init schema");
-    Mutex::new(conn)
+    match open_and_init_database(&path) {
+        Ok(connection) => Mutex::new(connection),
+        Err(error) => {
+            let message = format!(
+                "Duskry could not safely open its local database: {error}. No existing data was changed. Restart after checking available disk space and app-data permissions."
+            );
+            eprintln!(
+                "Database initialization failed at {}: {error}",
+                path.display()
+            );
+            if let Ok(mut startup_error) = DB_INIT_ERROR.lock() {
+                *startup_error = Some(message);
+            }
+
+            // Keep the native shell alive so the frontend can present a
+            // recoverable startup error instead of crashing or silently
+            // replacing the user's database. This temporary database is never
+            // written over the original file.
+            let fallback =
+                Connection::open_in_memory().expect("Failed to create temporary recovery database");
+            fallback
+                .pragma_update(None, "foreign_keys", "ON")
+                .expect("Failed to configure temporary recovery database");
+            init_schema(&fallback).expect("Failed to initialize temporary recovery database");
+            Mutex::new(fallback)
+        }
+    }
 });
 
 fn get_db_path() -> PathBuf {
     crate::paths::app_data_file("duskry.db")
+}
+
+fn open_and_init_database(path: &Path) -> std::result::Result<Connection, String> {
+    let connection = Connection::open(path).map_err(|error| error.to_string())?;
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(|error| error.to_string())?;
+    init_schema(&connection).map_err(|error| error.to_string())?;
+    Ok(connection)
+}
+
+pub fn startup_error() -> Option<String> {
+    Lazy::force(&DB);
+    DB_INIT_ERROR.lock().ok()?.clone()
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {
@@ -28,6 +65,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             file_path    TEXT,
             domain       TEXT,
             started_at   INTEGER NOT NULL,
+            last_observed_at INTEGER,
             ended_at     INTEGER,
             duration_s   INTEGER
         );
@@ -119,6 +157,12 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_rules_project_priority ON rules(project_id, priority);
         CREATE INDEX IF NOT EXISTS idx_learning_signals_updated ON rule_learning_signals(updated_at);
     "#,
+    )?;
+    ensure_column(
+        conn,
+        "activities",
+        "last_observed_at",
+        "ALTER TABLE activities ADD COLUMN last_observed_at INTEGER",
     )?;
     ensure_column(
         conn,
@@ -445,6 +489,13 @@ pub struct Activity {
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub duration_s: Option<i64>,
+    /// Original persisted timing. Range queries clip the public timing above
+    /// to the requested day/report boundary so overlapping activities are not
+    /// double-counted, while edit flows can retain the source interval.
+    pub original_started_at: Option<i64>,
+    pub original_ended_at: Option<i64>,
+    pub original_duration_s: Option<i64>,
+    pub time_clipped: bool,
     pub project_id: Option<i64>,
     pub source: Option<String>,
     pub rule_id: Option<i64>,
@@ -520,10 +571,27 @@ pub fn save_activity_start(
 ) -> Result<i64> {
     let conn = DB.lock().expect("db lock");
     conn.execute(
-        "INSERT INTO activities (app_name, window_title, file_path, domain, started_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO activities (app_name, window_title, file_path, domain, started_at, last_observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
         params![app_name, window_title, file_path, domain, started_at],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Persist the last instant at which the tracker actually observed this window.
+/// The activity remains open so the UI can still identify it as ongoing. On an
+/// unclean shutdown this checkpoint is the recovery boundary, preventing sleep
+/// or app downtime from being credited to the previous window.
+pub fn checkpoint_activity(id: i64, observed_at: i64) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    conn.execute(
+        r#"
+        UPDATE activities
+        SET last_observed_at = MAX(COALESCE(last_observed_at, started_at), ?1)
+        WHERE id = ?2 AND ended_at IS NULL
+        "#,
+        params![observed_at, id],
+    )?;
+    Ok(())
 }
 
 pub fn finish_activity(id: i64, ended_at: i64) -> Result<()> {
@@ -537,7 +605,7 @@ pub fn finish_activity(id: i64, ended_at: i64) -> Result<()> {
         .unwrap_or(ended_at);
     let ended_at = ended_at.max(started_at);
     conn.execute(
-        "UPDATE activities SET ended_at = ?1, duration_s = ?2 WHERE id = ?3",
+        "UPDATE activities SET last_observed_at = ?1, ended_at = ?1, duration_s = ?2 WHERE id = ?3",
         params![ended_at, ended_at - started_at, id],
     )?;
     Ok(())
@@ -545,9 +613,13 @@ pub fn finish_activity(id: i64, ended_at: i64) -> Result<()> {
 
 pub fn close_open_activities(default_end_at: i64) -> Result<usize> {
     let conn = DB.lock().expect("db lock");
+    close_open_activities_conn(&conn, default_end_at)
+}
+
+fn close_open_activities_conn(conn: &Connection, default_end_at: i64) -> Result<usize> {
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, started_at,
+        SELECT id, started_at, last_observed_at,
                (SELECT MIN(next.started_at)
                 FROM activities next
                 WHERE next.started_at > current.started_at) AS next_started_at
@@ -561,6 +633,7 @@ pub fn close_open_activities(default_end_at: i64) -> Result<usize> {
             row.get::<_, i64>(0)?,
             row.get::<_, i64>(1)?,
             row.get::<_, Option<i64>>(2)?,
+            row.get::<_, Option<i64>>(3)?,
         ))
     })?;
 
@@ -568,10 +641,14 @@ pub fn close_open_activities(default_end_at: i64) -> Result<usize> {
     let open_activities = open_activities?;
     drop(stmt);
 
-    for (id, started_at, next_started_at) in &open_activities {
-        let ended_at = next_started_at.unwrap_or(default_end_at).max(*started_at);
+    for (id, started_at, last_observed_at, next_started_at) in &open_activities {
+        let recovery_boundary = last_observed_at.unwrap_or(default_end_at);
+        let ended_at = next_started_at
+            .map(|next| next.min(recovery_boundary))
+            .unwrap_or(recovery_boundary)
+            .max(*started_at);
         conn.execute(
-            "UPDATE activities SET ended_at = ?1, duration_s = ?2 WHERE id = ?3",
+            "UPDATE activities SET last_observed_at = ?1, ended_at = ?1, duration_s = ?2 WHERE id = ?3",
             params![ended_at, ended_at - started_at, id],
         )?;
     }
@@ -606,23 +683,35 @@ fn get_activities_in_range_conn(
     from_ts: i64,
     to_ts: i64,
 ) -> Result<Vec<Activity>> {
+    // Frontend callers pass an inclusive final second (date-fns endOfDay).
+    // Convert it into an exclusive interval boundary so the last second of a
+    // day is counted and adjacent report ranges do not overlap.
+    let to_exclusive = to_ts.saturating_add(1);
     let mut stmt = conn.prepare(
         r#"
         SELECT a.id, a.app_name, a.window_title, a.file_path, a.domain,
-               a.started_at, a.ended_at,
-               COALESCE(a.duration_s,
-                   CASE WHEN a.ended_at IS NULL
-                        THEN (unixepoch() - a.started_at)
-                        ELSE NULL END) AS duration_s,
-               ass.project_id, ass.source, ass.rule_id, ass.confidence, ass.reason
+               MAX(a.started_at, ?1) AS display_started_at,
+               CASE
+                   WHEN a.ended_at IS NULL AND unixepoch() < ?2 THEN NULL
+                   ELSE MIN(COALESCE(a.ended_at, unixepoch()), ?2)
+               END AS display_ended_at,
+               MAX(
+                   0,
+                   MIN(COALESCE(a.ended_at, unixepoch()), ?2) - MAX(a.started_at, ?1)
+               ) AS display_duration_s,
+               ass.project_id, ass.source, ass.rule_id, ass.confidence, ass.reason,
+               a.started_at AS original_started_at,
+               a.ended_at AS original_ended_at,
+               COALESCE(a.duration_s, unixepoch() - a.started_at) AS original_duration_s,
+               (a.started_at < ?1 OR COALESCE(a.ended_at, unixepoch()) > ?2) AS time_clipped
         FROM activities a
         LEFT JOIN assignments ass ON ass.activity_id = a.id
-        WHERE a.started_at <= ?2
-          AND COALESCE(a.ended_at, unixepoch()) >= ?1
+        WHERE a.started_at < ?2
+          AND COALESCE(a.ended_at, unixepoch()) > ?1
         ORDER BY a.started_at DESC
     "#,
     )?;
-    let rows = stmt.query_map(params![from_ts, to_ts], |row| {
+    let rows = stmt.query_map(params![from_ts, to_exclusive], |row| {
         Ok(Activity {
             id: row.get(0)?,
             app_name: row.get(1)?,
@@ -637,9 +726,71 @@ fn get_activities_in_range_conn(
             rule_id: row.get(10)?,
             assignment_confidence: row.get(11)?,
             assignment_reason: row.get(12)?,
+            original_started_at: row.get(13)?,
+            original_ended_at: row.get(14)?,
+            original_duration_s: row.get(15)?,
+            time_clipped: row.get(16)?,
         })
     })?;
-    rows.collect()
+    let ranged = rows.collect::<Result<Vec<_>>>()?;
+    Ok(ranged
+        .into_iter()
+        .flat_map(split_activity_at_local_day_boundaries)
+        .collect())
+}
+
+fn split_activity_at_local_day_boundaries(activity: Activity) -> Vec<Activity> {
+    let display_end = activity.ended_at.unwrap_or_else(|| {
+        activity
+            .started_at
+            .saturating_add(activity.duration_s.unwrap_or(0))
+    });
+    if display_end <= activity.started_at {
+        return vec![activity];
+    }
+
+    let display_start = activity.started_at;
+    let was_open = activity.ended_at.is_none();
+    let mut cursor = display_start;
+    let mut slices = Vec::new();
+
+    // A corrupt multi-decade interval should not allocate unbounded memory.
+    // Ten thousand local-day slices is already far beyond normal app history.
+    while cursor < display_end && slices.len() < 10_000 {
+        let next_boundary = next_local_midnight_after(cursor).unwrap_or(display_end);
+        let slice_end = display_end.min(next_boundary.max(cursor.saturating_add(1)));
+        let mut slice = activity.clone();
+        slice.started_at = cursor;
+        slice.ended_at = if was_open && slice_end == display_end {
+            None
+        } else {
+            Some(slice_end)
+        };
+        slice.duration_s = Some(slice_end.saturating_sub(cursor));
+        slice.time_clipped =
+            activity.time_clipped || cursor != display_start || slice_end != display_end;
+        slices.push(slice);
+        cursor = slice_end;
+    }
+
+    if cursor < display_end {
+        if let Some(last) = slices.last_mut() {
+            last.ended_at = activity.ended_at.map(|_| display_end);
+            last.duration_s = Some(display_end.saturating_sub(last.started_at));
+            last.time_clipped = true;
+        }
+    }
+    slices
+}
+
+fn next_local_midnight_after(timestamp: i64) -> Option<i64> {
+    let local = chrono::Local.timestamp_opt(timestamp, 0).single()?;
+    let next_date = local.date_naive().succ_opt()?;
+    let midnight = next_date.and_hms_opt(0, 0, 0)?;
+    chrono::Local
+        .from_local_datetime(&midnight)
+        .earliest()
+        .map(|value| value.timestamp())
 }
 
 /// Assign a collection of activities atomically. If any activity or project is
@@ -722,6 +873,10 @@ pub fn get_activity(activity_id: i64) -> Result<Activity> {
                 rule_id: row.get(10)?,
                 assignment_confidence: row.get(11)?,
                 assignment_reason: row.get(12)?,
+                original_started_at: row.get(5)?,
+                original_ended_at: row.get(6)?,
+                original_duration_s: row.get(7)?,
+                time_clipped: false,
             })
         },
     )
@@ -1226,6 +1381,46 @@ pub fn count_projects() -> Result<i64> {
     conn.query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
 }
 
+/// Return whether a project may be selected as the active focus. Paid access
+/// passes `None`; Free/Expired access passes the oldest-project allowance.
+pub fn is_project_focus_eligible(project_id: i64, project_limit: Option<i64>) -> Result<bool> {
+    if project_id <= 0 {
+        return Ok(project_id == 0);
+    }
+    let conn = DB.lock().expect("db lock");
+    is_project_focus_eligible_conn(&conn, project_id, project_limit)
+}
+
+fn is_project_focus_eligible_conn(
+    conn: &Connection,
+    project_id: i64,
+    project_limit: Option<i64>,
+) -> Result<bool> {
+    if let Some(limit) = project_limit {
+        return conn.query_row(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM (
+                    SELECT id
+                    FROM projects
+                    ORDER BY COALESCE(created_at, 0) ASC, id ASC
+                    LIMIT ?1
+                ) eligible
+                WHERE eligible.id = ?2
+            )
+            "#,
+            params![limit.max(0), project_id],
+            |row| row.get(0),
+        );
+    }
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM projects WHERE id = ?1)",
+        params![project_id],
+        |row| row.get(0),
+    )
+}
+
 pub fn create_project(name: &str, color: &str) -> Result<i64> {
     let conn = DB.lock().expect("db lock");
     let now = chrono::Utc::now().timestamp();
@@ -1432,7 +1627,7 @@ pub fn update_activity(
     let duration = (ended_at - started_at).max(0);
     let conn = DB.lock().expect("db lock");
     conn.execute(
-        "UPDATE activities SET app_name = ?1, window_title = ?2, started_at = ?3, ended_at = ?4, duration_s = ?5 WHERE id = ?6",
+        "UPDATE activities SET app_name = ?1, window_title = ?2, started_at = ?3, last_observed_at = ?4, ended_at = ?4, duration_s = ?5 WHERE id = ?6",
         params![app_name, window_title, started_at, ended_at, duration, id],
     )?;
     conn.execute(
@@ -1453,7 +1648,7 @@ pub fn create_manual_activity(
     let note_val: Option<&str> = if note.is_empty() { None } else { Some(note) };
     let conn = DB.lock().expect("db lock");
     conn.execute(
-        "INSERT INTO activities (app_name, window_title, started_at, ended_at, duration_s) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO activities (app_name, window_title, started_at, last_observed_at, ended_at, duration_s) VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
         params![title, note_val, started_at, ended_at, duration_s],
     )?;
     let act_id = conn.last_insert_rowid();
@@ -1493,6 +1688,10 @@ pub fn get_unassigned_activities_in_range(from_ts: i64, to_ts: i64) -> Result<Ve
             rule_id: None,
             assignment_confidence: None,
             assignment_reason: None,
+            original_started_at: row.get(5)?,
+            original_ended_at: row.get(6)?,
+            original_duration_s: row.get(7)?,
+            time_clipped: false,
         })
     })?;
     rows.collect()
@@ -1582,6 +1781,143 @@ mod tests {
         for expected in ["rule_id", "confidence", "reason"] {
             assert!(assignment_columns.iter().any(|column| column == expected));
         }
+        assert!(table_columns(&conn, "activities")
+            .iter()
+            .any(|column| column == "last_observed_at"));
+    }
+
+    #[test]
+    fn corrupt_database_initialization_fails_without_replacing_user_data() {
+        let path = std::env::temp_dir().join(format!(
+            "duskry-corrupt-db-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let original = b"not a sqlite database";
+        std::fs::write(&path, original).expect("corrupt fixture");
+
+        assert!(open_and_init_database(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn open_activity_recovery_uses_the_last_observation_not_restart_time() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        init_schema(&conn).expect("schema initializes");
+        conn.execute(
+            "INSERT INTO activities (id, app_name, started_at, last_observed_at) VALUES (1, 'Editor', 100, 130)",
+            [],
+        )
+        .expect("open activity");
+
+        assert_eq!(close_open_activities_conn(&conn, 10_000).unwrap(), 1);
+        let recovered: (i64, i64) = conn
+            .query_row(
+                "SELECT ended_at, duration_s FROM activities WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("recovered activity");
+        assert_eq!(recovered, (130, 30));
+    }
+
+    #[test]
+    fn range_queries_clip_cross_boundary_activity_without_losing_original_timing() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        init_schema(&conn).expect("schema initializes");
+        conn.execute(
+            "INSERT INTO activities (id, app_name, started_at, last_observed_at, ended_at, duration_s) VALUES (1, 'Editor', 150, 350, 350, 200)",
+            [],
+        )
+        .expect("cross-boundary activity");
+        conn.execute(
+            "INSERT INTO activities (id, app_name, started_at, last_observed_at, ended_at, duration_s) VALUES (2, 'Browser', 220, 240, 240, 20)",
+            [],
+        )
+        .expect("contained activity");
+
+        // The caller's range is inclusive (200 through 299), which represents
+        // the half-open interval [200, 300) internally.
+        let activities = get_activities_in_range_conn(&conn, 200, 299).unwrap();
+        let clipped = activities
+            .iter()
+            .find(|activity| activity.id == Some(1))
+            .unwrap();
+        assert_eq!(clipped.started_at, 200);
+        assert_eq!(clipped.ended_at, Some(300));
+        assert_eq!(clipped.duration_s, Some(100));
+        assert_eq!(clipped.original_started_at, Some(150));
+        assert_eq!(clipped.original_ended_at, Some(350));
+        assert_eq!(clipped.original_duration_s, Some(200));
+        assert!(clipped.time_clipped);
+
+        let contained = activities
+            .iter()
+            .find(|activity| activity.id == Some(2))
+            .unwrap();
+        assert_eq!(contained.started_at, 220);
+        assert_eq!(contained.ended_at, Some(240));
+        assert_eq!(contained.duration_s, Some(20));
+        assert!(!contained.time_clipped);
+    }
+
+    #[test]
+    fn multi_day_ranges_return_one_duration_slice_per_local_day() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        init_schema(&conn).expect("schema initializes");
+        let start = chrono::Local
+            .with_ymd_and_hms(2026, 7, 14, 23, 30, 0)
+            .single()
+            .expect("local start")
+            .timestamp();
+        let end = chrono::Local
+            .with_ymd_and_hms(2026, 7, 15, 0, 30, 0)
+            .single()
+            .expect("local end")
+            .timestamp();
+        conn.execute(
+            "INSERT INTO activities (id, app_name, started_at, last_observed_at, ended_at, duration_s) VALUES (1, 'Editor', ?1, ?2, ?2, ?3)",
+            params![start, end, end - start],
+        )
+        .expect("overnight activity");
+
+        let slices = get_activities_in_range_conn(&conn, start, end).unwrap();
+        assert_eq!(slices.len(), 2);
+        assert_eq!(
+            slices
+                .iter()
+                .map(|slice| slice.duration_s.unwrap())
+                .sum::<i64>(),
+            3600
+        );
+        assert_eq!(slices[0].duration_s, Some(1800));
+        assert_eq!(slices[1].duration_s, Some(1800));
+        assert!(slices.iter().all(|slice| slice.time_clipped));
+        assert!(slices
+            .iter()
+            .all(|slice| slice.original_started_at == Some(start)));
+    }
+
+    #[test]
+    fn free_project_access_is_limited_to_the_oldest_three_projects() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        init_schema(&conn).expect("schema initializes");
+        for (id, created_at) in [(1, 40), (2, 10), (3, 30), (4, 20)] {
+            conn.execute(
+                "INSERT INTO projects (id, name, color, created_at) VALUES (?1, ?2, '#000', ?3)",
+                params![id, format!("Project {id}"), created_at],
+            )
+            .expect("project");
+        }
+
+        assert!(is_project_focus_eligible_conn(&conn, 2, Some(3)).unwrap());
+        assert!(is_project_focus_eligible_conn(&conn, 3, Some(3)).unwrap());
+        assert!(is_project_focus_eligible_conn(&conn, 4, Some(3)).unwrap());
+        assert!(!is_project_focus_eligible_conn(&conn, 1, Some(3)).unwrap());
+        assert!(is_project_focus_eligible_conn(&conn, 1, None).unwrap());
+        assert!(!is_project_focus_eligible_conn(&conn, 99, None).unwrap());
     }
 
     #[test]

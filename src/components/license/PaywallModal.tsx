@@ -105,7 +105,7 @@ export function PaywallModal() {
       price: billing === 'monthly' ? proplusMonthly : proplusYearly,
       period: billing === 'monthly' ? '/mo' : '/yr',
       sub: billing === 'monthly' ? `or ${proplusYearly}/yr` : 'billed annually',
-      features: ['Everything in Pro', 'Unlimited history', 'Team sharing', 'Priority support'],
+      features: ['Everything in Pro', 'Unlimited history', '3 devices', 'Priority support'],
       featured: true,
     },
   ];

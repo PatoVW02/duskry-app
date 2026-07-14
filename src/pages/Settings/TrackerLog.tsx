@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { RefreshCw, Trash2, Copy, Check } from 'lucide-react';
+import { errorMessage } from '../../lib/utils';
 
 type LogLevel = 'stop' | 'start' | 'resume' | 'idle' | 'warn' | 'info';
 
@@ -28,20 +29,43 @@ export function TrackerLog() {
   const [path, setPath]       = useState('');
   const [copied, setCopied]   = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const requestIdRef = useRef(0);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = async () => {
-    const result = await invoke<string[]>('get_tracker_log', { lines: 400 });
-    setLines(result);
-  };
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    try {
+      const result = await invoke<string[]>('get_tracker_log', { lines: 400 });
+      if (requestId !== requestIdRef.current) return;
+      setLines(result);
+      setLoadError(null);
+    } catch (error) {
+      if (requestId !== requestIdRef.current) return;
+      setLoadError(errorMessage(error, 'The tracker log could not be loaded.'));
+    }
+  }, []);
 
   useEffect(() => {
-    invoke<string>('get_tracker_log_path').then(setPath);
-    load();
-    const id = setInterval(load, 3000);
-    return () => clearInterval(id);
-  }, []);
+    let disposed = false;
+    void invoke<string>('get_tracker_log_path')
+      .then((logPath) => {
+        if (!disposed) setPath(logPath);
+      })
+      .catch((error: unknown) => {
+        if (!disposed) setLoadError(errorMessage(error, 'The tracker log path could not be loaded.'));
+      });
+    void load();
+    const id = setInterval(() => void load(), 3000);
+    return () => {
+      disposed = true;
+      requestIdRef.current += 1;
+      clearInterval(id);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, [load]);
 
   // Auto-scroll to bottom when new lines arrive
   useEffect(() => {
@@ -58,14 +82,25 @@ export function TrackerLog() {
   };
 
   const copyPath = async () => {
-    await navigator.clipboard.writeText(path);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setLoadError(null);
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      setLoadError(errorMessage(error, 'The log path could not be copied.'));
+    }
   };
 
   const clearLog = async () => {
-    await invoke('clear_tracker_log');
-    setLines([]);
+    setLoadError(null);
+    try {
+      await invoke('clear_tracker_log');
+      setLines([]);
+    } catch (error) {
+      setLoadError(errorMessage(error, 'The tracker log could not be cleared.'));
+    }
   };
 
   return (
@@ -82,7 +117,8 @@ export function TrackerLog() {
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
-            onClick={load}
+            type="button"
+            onClick={() => void load()}
             title="Refresh now"
             style={{
               background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -93,7 +129,9 @@ export function TrackerLog() {
             <RefreshCw size={11} /> Refresh
           </button>
           <button
-            onClick={copyPath}
+            type="button"
+            onClick={() => void copyPath()}
+            disabled={!path}
             title="Copy log file path"
             style={{
               background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -105,7 +143,8 @@ export function TrackerLog() {
             {copied ? 'Copied!' : 'Copy path'}
           </button>
           <button
-            onClick={clearLog}
+            type="button"
+            onClick={() => void clearLog()}
             title="Clear log"
             style={{
               background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
@@ -117,6 +156,12 @@ export function TrackerLog() {
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div role="alert" style={{ fontSize: 11, color: 'rgba(248,113,113,0.88)' }}>
+          {loadError}
+        </div>
+      )}
 
       {/* Log area */}
       <div

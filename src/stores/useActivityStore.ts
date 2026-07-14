@@ -11,6 +11,10 @@ export interface Activity {
   started_at: number;
   ended_at: number | null;
   duration_s: number | null;
+  original_started_at?: number | null;
+  original_ended_at?: number | null;
+  original_duration_s?: number | null;
+  time_clipped?: boolean;
   project_id: number | null;
   source: string | null;
   rule_id?: number | null;
@@ -57,6 +61,11 @@ interface ActivityStore {
   totalTrackedSecs: () => number;
 }
 
+// Every screen reads through the same activity store. Date navigation and the
+// 10-second live refresh can overlap, so only the newest request is allowed to
+// publish data or loading/error state.
+let latestActivityRequestId = 0;
+
 function rulePatternKey(notice: RuleSuggestion): string {
   return `${notice.project_id}:${notice.field}:${notice.operator}:${notice.value.toLocaleLowerCase()}`;
 }
@@ -89,16 +98,23 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
   viewDate: new Date(),
 
   fetchForDate: async (date: Date) => {
+    const requestId = ++latestActivityRequestId;
     set({ loading: true, error: null });
     try {
       const fromTs = Math.floor(startOfDay(date).getTime() / 1000);
       const toTs   = Math.floor(endOfDay(date).getTime() / 1000);
       const data = await invoke<Activity[]>('get_activities_for_date', { fromTs, toTs });
+      if (requestId !== latestActivityRequestId) return;
       set({ activities: data, loading: false, error: null });
     } catch (error) {
+      if (requestId !== latestActivityRequestId) return;
       set({
         loading: false,
-        error: error instanceof Error ? error.message : 'Today’s activity could not be loaded.',
+        error: typeof error === 'string'
+          ? error
+          : error instanceof Error
+            ? error.message
+            : 'Today’s activity could not be loaded.',
       });
     }
   },

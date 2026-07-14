@@ -12,6 +12,17 @@ jobs:
     permissions:
       contents: write
     runs-on: windows-latest
+    env:
+      VITE_BILLING_PLANS_ENABLED: true
+      DUSKRY_BILLING_PLANS_ENABLED: true
+      DUSKRY_VARIANT_PRO_MONTHLY: ${{ vars.DUSKRY_VARIANT_PRO_MONTHLY }}
+      DUSKRY_VARIANT_PRO_YEARLY: ${{ vars.DUSKRY_VARIANT_PRO_YEARLY }}
+      DUSKRY_VARIANT_PROPLUS_MONTHLY: ${{ vars.DUSKRY_VARIANT_PROPLUS_MONTHLY }}
+      DUSKRY_VARIANT_PROPLUS_YEARLY: ${{ vars.DUSKRY_VARIANT_PROPLUS_YEARLY }}
+      VITE_CHECKOUT_PRO_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/7bfbe944-2be1-4bf6-89ef-8c58e9c8e520
+      VITE_CHECKOUT_PRO_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/f507c59b-4bd2-4290-a9b4-0a99dd4d5b9f
+      VITE_CHECKOUT_PROPLUS_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/6d141a61-7629-45fa-a6c9-e2a3aac25717
+      VITE_CHECKOUT_PROPLUS_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/c77a2394-ad5c-40f3-ae9e-cd8f73761d98
 
     steps:
       - uses: actions/checkout@v4
@@ -33,26 +44,94 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Validate production configuration
+        run: npm run check:config -- --production
+
+      - name: Import Windows code-signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            throw 'Missing WINDOWS_CERTIFICATE secret. Refusing to publish unsigned Windows installers.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw 'Missing WINDOWS_CERTIFICATE_PASSWORD secret. Refusing to publish unsigned Windows installers.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+            throw 'Missing WINDOWS_TIMESTAMP_URL repository variable.'
+          }
+
+          $timestamp = [Uri]$env:WINDOWS_TIMESTAMP_URL
+          if ($timestamp.Scheme -notin @('http', 'https')) {
+            throw 'WINDOWS_TIMESTAMP_URL must be an HTTP(S) timestamp service URL.'
+          }
+
+          $certificateDirectory = Join-Path $env:RUNNER_TEMP 'duskry-certificate'
+          New-Item -ItemType Directory -Path $certificateDirectory -Force | Out-Null
+          $encodedPath = Join-Path $certificateDirectory 'certificate.txt'
+          $pfxPath = Join-Path $certificateDirectory 'certificate.pfx'
+          Set-Content -Path $encodedPath -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode $encodedPath $pfxPath | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw 'WINDOWS_CERTIFICATE could not be decoded as a base64 PFX certificate.'
+          }
+
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $certificate = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password)[0]
+          Remove-Item -Path $encodedPath, $pfxPath -Force
+          if ($null -eq $certificate -or [string]::IsNullOrWhiteSpace($certificate.Thumbprint)) {
+            throw 'The Windows signing certificate could not be imported.'
+          }
+
+          @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $certificate.Thumbprint
+                digestAlgorithm = 'sha256'
+                timestampUrl = $env:WINDOWS_TIMESTAMP_URL
+              }
+            }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Path src-tauri/tauri.windows.conf.json
+
       - name: Render version-specific release notes
         shell: bash
         run: node scripts/render-release-notes.mjs "${GITHUB_REF_NAME#v}" release-notes.md
 
-      - name: Build and publish Windows release
+      - name: Wait for macOS draft release
+        shell: bash
+        run: |
+          for i in $(seq 1 20); do
+            release_record=$(
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                | jq -c --arg tag "${GITHUB_REF_NAME}" '.[] | select(.tag_name == $tag)'
+            )
+            if [ -n "${release_record}" ]; then
+              draft_state=$(jq -r '.draft' <<<"${release_record}")
+              if [ "${draft_state}" = "true" ]; then
+                echo "Found the macOS draft release."
+                exit 0
+              fi
+              echo "::error::Release ${GITHUB_REF_NAME} already exists but is public. Refusing a non-atomic upload."
+              exit 1
+            fi
+            echo "Waiting for the macOS draft release (attempt ${i}/20)..."
+            sleep 15
+          done
+          echo "::error::The macOS draft release was not created within five minutes."
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and upload Windows release assets
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VITE_BILLING_PLANS_ENABLED: true
-          DUSKRY_BILLING_PLANS_ENABLED: true
-          DUSKRY_VARIANT_PRO_MONTHLY: ${{ vars.DUSKRY_VARIANT_PRO_MONTHLY }}
-          DUSKRY_VARIANT_PRO_YEARLY: ${{ vars.DUSKRY_VARIANT_PRO_YEARLY }}
-          DUSKRY_VARIANT_PROPLUS_MONTHLY: ${{ vars.DUSKRY_VARIANT_PROPLUS_MONTHLY }}
-          DUSKRY_VARIANT_PROPLUS_YEARLY: ${{ vars.DUSKRY_VARIANT_PROPLUS_YEARLY }}
-          VITE_CHECKOUT_PRO_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/19796589-e460-4e38-8513-0b060194031d
-          VITE_CHECKOUT_PRO_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/ef3fcef5-e5d2-4b78-8b50-71739ffdc0fd
-          VITE_CHECKOUT_PROPLUS_MONTHLY: https://duskry.lemonsqueezy.com/checkout/buy/e4ce5c2b-7fab-4398-88c0-ad66bef7ed6a
-          VITE_CHECKOUT_PROPLUS_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/113dc867-f131-4b35-812c-66bddd3aa278
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Duskry ${{ github.ref_name }}'
@@ -65,33 +144,97 @@ jobs:
             **macOS**: Download the signed and notarized `.dmg` file for your chip.
 
             **Windows**: Download the `.msi` or `.exe` installer
-          releaseDraft: false
+          # Keep the release private until both platform manifests and final
+          # notes have been uploaded successfully.
+          releaseDraft: true
           prerelease: false
 
       - name: Merge Mac + Windows updater manifests
         shell: bash
         run: |
-          # tauri-action uploaded a Windows-only latest.json; merge Mac entries back in
-          # Retry a few times in case the Mac script is still uploading
-          for i in 1 2 3 4 5; do
+          # tauri-action uploaded a Windows-only latest.json; merge Mac entries
+          # back in. A missing or malformed platform manifest is a hard failure,
+          # leaving the release safely in draft state.
+          for i in $(seq 1 20); do
             gh release download "${{ github.ref_name }}" --pattern "mac-latest.json" -O mac-latest.json --clobber 2>/dev/null && break
-            echo "Waiting for mac-latest.json (attempt $i/5)..."
-            sleep 30
+            echo "Waiting for mac-latest.json (attempt ${i}/20)..."
+            sleep 15
           done
 
-          if [ -f mac-latest.json ]; then
-            gh release download "${{ github.ref_name }}" --pattern "latest.json" -O win-latest.json --clobber
-            jq -s '{version: .[0].version, notes: .[0].notes, pub_date: .[0].pub_date, platforms: (.[0].platforms + .[1].platforms)}' mac-latest.json win-latest.json > latest.json
-            gh release upload "${{ github.ref_name }}" latest.json --clobber
-            echo "Merged Mac + Windows updater manifests into latest.json"
-          else
-            echo "mac-latest.json not found — latest.json will be Windows-only"
+          if [ ! -f mac-latest.json ]; then
+            echo "::error::mac-latest.json was not uploaded within five minutes."
+            exit 1
           fi
+
+          gh release download "${{ github.ref_name }}" --pattern "latest.json" -O win-latest.json --clobber
+          expected_version="${GITHUB_REF_NAME#v}"
+
+          jq -e --arg version "${expected_version}" '
+            .version == $version
+            and (.platforms["darwin-aarch64"].url | type == "string" and length > 0)
+            and (.platforms["darwin-aarch64"].signature | type == "string" and length > 0)
+            and (.platforms["darwin-x86_64"].url | type == "string" and length > 0)
+            and (.platforms["darwin-x86_64"].signature | type == "string" and length > 0)
+          ' mac-latest.json >/dev/null
+
+          jq -e --arg version "${expected_version}" '
+            .version == $version
+            and (.platforms["windows-x86_64"].url | type == "string" and length > 0)
+            and (.platforms["windows-x86_64"].signature | type == "string" and length > 0)
+          ' win-latest.json >/dev/null
+
+          jq -s --arg version "${expected_version}" '
+            {
+              version: $version,
+              notes: (.[1].notes // .[0].notes // "See release page for details."),
+              pub_date: (.[1].pub_date // .[0].pub_date),
+              platforms: (.[0].platforms + .[1].platforms)
+            }
+          ' mac-latest.json win-latest.json > latest.json
+
+          jq -e --arg version "${expected_version}" '
+            .version == $version
+            and (.platforms | has("darwin-aarch64"))
+            and (.platforms | has("darwin-x86_64"))
+            and (.platforms | has("windows-x86_64"))
+          ' latest.json >/dev/null
+
+          gh release upload "${{ github.ref_name }}" latest.json --clobber
+          echo "Merged and validated Mac + Windows updater manifests."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish version-specific release notes
+      - name: Upload version-specific release notes
         shell: bash
-        run: gh release edit "${{ github.ref_name }}" --notes-file release-notes.md
+        run: |
+          release_record=$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              | jq -c --arg tag "${GITHUB_REF_NAME}" '.[] | select(.tag_name == $tag)'
+          )
+          release_id=$(jq -r 'select(.draft == true) | .id' <<<"${release_record}")
+          if [ -z "${release_id}" ]; then
+            echo "::error::Draft release ${GITHUB_REF_NAME} was not found."
+            exit 1
+          fi
+          jq -n --rawfile body release-notes.md '{body: $body}' \
+            | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --input - >/dev/null
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish completed release
+        shell: bash
+        run: |
+          release_record=$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              | jq -c --arg tag "${GITHUB_REF_NAME}" '.[] | select(.tag_name == $tag)'
+          )
+          release_id=$(jq -r 'select(.draft == true) | .id' <<<"${release_record}")
+          if [ -z "${release_id}" ]; then
+            echo "::error::Release ${GITHUB_REF_NAME} is no longer a draft; refusing to continue."
+            exit 1
+          fi
+          jq -n '{draft: false, make_latest: "true"}' \
+            | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --input - >/dev/null
+          echo "Published the complete cross-platform release ${GITHUB_REF_NAME}."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

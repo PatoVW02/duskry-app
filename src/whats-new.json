@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.1.2",
+      "title": "Updates You Can Trust",
+      "summary": "Duskry is now more dependable when updating, verifying subscriptions, tracking activity, and handling plan changes.",
+      "items": [
+        {
+          "icon": "CheckSquare",
+          "text": "Updates stay visible and retryable when a download or installation fails, with clearer platform availability errors."
+        },
+        {
+          "icon": "Eye",
+          "text": "Paid access is preserved through temporary connection problems while invalid or mismatched licenses still fail safely."
+        },
+        {
+          "icon": "Clock3",
+          "text": "Tracking and reports now handle sleep, crashes, recovery, and activity that crosses midnight more accurately."
+        },
+        {
+          "icon": "FolderOpen",
+          "text": "Project assignment remains clear after plan changes, and locked projects can no longer receive new activity by mistake."
+        }
+      ]
+    },
+    {
       "version": "1.1.1",
       "title": "A Steadier, Simpler Workspace",
       "summary": "Duskry now keeps open work in place during live updates, simplifies Projects, and strengthens Windows support.",

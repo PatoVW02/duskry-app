@@ -18,7 +18,7 @@ function openPortal() {
 const PLAN_FEATURES: Record<SelectedPlan, string[]> = {
   free:    ['3 projects', '7-day history', 'Basic tracking'],
   pro:     ['Unlimited projects', '90-day history', 'Auto-rules', 'Reports & exports', '2 devices'],
-  proPlus: ['Everything in Pro', 'Unlimited history', '3 devices', 'Team sharing', 'Priority support'],
+  proPlus: ['Everything in Pro', 'Unlimited history', '3 devices', 'Priority support'],
 };
 
 const PLAN_LABEL: Record<SelectedPlan, string> = {
@@ -35,7 +35,6 @@ const COMPARISON_ROWS: { label: string; free: CellVal; pro: CellVal; proPlus: Ce
   { label: 'Auto-rules',       free: false,     pro: true,        proPlus: true },
   { label: 'Reports & exports',free: false,     pro: true,        proPlus: true },
   { label: 'Devices',          free: '1',       pro: '2',         proPlus: '3' },
-  { label: 'Team sharing',     free: false,     pro: false,       proPlus: true },
   { label: 'Priority support', free: false,     pro: false,       proPlus: true },
 ];
 
@@ -627,7 +626,7 @@ export function Billing() {
                 >
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{PLAN_LABEL[plan]}</div>
                   <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.38)' }}>
-                    {plan === 'pro' ? '90-day history, reports, auto-rules' : 'Unlimited history, team sharing, priority support'}
+                    {plan === 'pro' ? '90-day history, reports, auto-rules' : 'Unlimited history, 3 devices, priority support'}
                   </div>
                 </button>
               );

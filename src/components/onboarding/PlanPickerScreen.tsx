@@ -46,7 +46,7 @@ function buildPlans(prices: ReturnType<typeof usePricesStore.getState>['prices']
       price: prices.proplus_monthly,
       period: '/mo',
       yearly: `or ${prices.proplus_yearly}/yr`,
-      features: ['Everything in Pro', 'Unlimited history', '3 devices', 'Team sharing', 'Priority support'],
+      features: ['Everything in Pro', 'Unlimited history', '3 devices', 'Priority support'],
       featured: true,
       cta: 'Start 7-day trial',
       trialLabel: '7 days free',

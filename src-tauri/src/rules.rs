@@ -231,14 +231,23 @@ fn condition_matches(
         if !matches!(operator, "host_equals" | "contains") {
             return false;
         }
-        let matched = normalized_host(window.url.as_deref().unwrap_or(""))
+        // Absence of an observed hostname is unknown, not a negative match.
+        // In particular, Windows does not capture browser URLs: allowing
+        // negation to invert `None` would make a "not this website" condition
+        // match every Windows activity.
+        let Some((actual, expected)) = window
+            .url
+            .as_deref()
+            .and_then(normalized_host)
             .zip(normalized_rule_host(value))
-            .map(|(actual, expected)| match operator {
-                "host_equals" => actual == expected || actual.ends_with(&format!(".{expected}")),
-                "contains" => actual.contains(&expected),
-                _ => unreachable!("URL operator checked above"),
-            })
-            .unwrap_or(false);
+        else {
+            return false;
+        };
+        let matched = match operator {
+            "host_equals" => actual == expected || actual.ends_with(&format!(".{expected}")),
+            "contains" => actual.contains(&expected),
+            _ => unreachable!("URL operator checked above"),
+        };
         return if negated { !matched } else { matched };
     }
 
@@ -358,6 +367,35 @@ fn node_uses_only_app_url(node: &RuleNode) -> bool {
         }
         RuleNode::Condition(condition) => condition.field == "app" || condition.field == "url",
     }
+}
+
+fn node_uses_url(node: &RuleNode) -> bool {
+    match node {
+        RuleNode::Group(group) => group.conditions.iter().any(node_uses_url),
+        RuleNode::Condition(condition) => condition.field == "url",
+    }
+}
+
+pub fn validate_platform_capabilities(
+    field: &str,
+    value: &str,
+    captures_browser_domains: bool,
+) -> Result<(), String> {
+    if captures_browser_domains {
+        return Ok(());
+    }
+    let uses_url = field == "url"
+        || (field == "compound"
+            && serde_json::from_str::<CompoundRule>(value)
+                .map(|compound| compound.conditions.iter().any(node_uses_url))
+                .unwrap_or(false));
+    if uses_url {
+        return Err(
+            "Website rules are unavailable on this platform because Duskry cannot capture browser hostnames."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Public wrapper used for retroactive rule application and learning analysis.
@@ -545,6 +583,27 @@ mod tests {
     }
 
     #[test]
+    fn missing_hostname_never_satisfies_a_negated_url_condition() {
+        let value = serde_json::json!({
+            "combinator": "and",
+            "conditions": [{
+                "field": "url",
+                "operator": "host_equals",
+                "value": "github.com",
+                "negated": true
+            }]
+        })
+        .to_string();
+        let mut without_url = window();
+        without_url.url = None;
+
+        assert!(!rule_matches_one(
+            &rule("compound", "matches", &value),
+            &without_url
+        ));
+    }
+
+    #[test]
     fn internal_and_non_web_schemes_are_not_website_hosts() {
         assert_eq!(
             normalized_host("https://docs.github.com/private"),
@@ -582,6 +641,33 @@ mod tests {
         assert!(validate_rule("url", "host_equals", "https://github.com/private").is_err());
         assert!(validate_rule("url", "contains", "github.com?token=private").is_err());
         assert!(validate_rule("url", "equals", "github.com").is_err());
+    }
+
+    #[test]
+    fn platforms_without_domain_capture_reject_direct_and_nested_url_rules() {
+        let nested = serde_json::json!({
+            "combinator": "and",
+            "conditions": [{
+                "combinator": "or",
+                "conditions": [
+                    { "field": "app", "operator": "equals", "value": "Safari" },
+                    { "field": "url", "operator": "host_equals", "value": "example.com" }
+                ]
+            }]
+        })
+        .to_string();
+        let app_only = serde_json::json!({
+            "combinator": "and",
+            "conditions": [
+                { "field": "app", "operator": "equals", "value": "Safari" }
+            ]
+        })
+        .to_string();
+
+        assert!(validate_platform_capabilities("url", "example.com", false).is_err());
+        assert!(validate_platform_capabilities("compound", &nested, false).is_err());
+        assert!(validate_platform_capabilities("compound", &app_only, false).is_ok());
+        assert!(validate_platform_capabilities("url", "example.com", true).is_ok());
     }
 
     #[test]

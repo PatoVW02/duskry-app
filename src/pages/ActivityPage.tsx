@@ -1,13 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { isToday, startOfDay, format, fromUnixTime } from 'date-fns';
 import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronRight, ChevronDown, Check, Globe, Folder, Trash2, X } from 'lucide-react';
 import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
-import { formatDuration } from '../lib/utils';
+import { errorMessage, formatDuration } from '../lib/utils';
 import { dragState } from '../lib/dragState';
 import { normalizeTimelineActivities } from '../lib/activityPresentation';
+import { lockedFreeProjectIds } from '../lib/projectAccess';
 import { Select } from '../components/ui/Select';
 
 // ── Tree types ─────────────────────────────────────────────────────────────
@@ -622,6 +623,10 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const updateActivity  = useActivityStore((s) => s.updateActivity);
   const projects        = useProjectStore((s) => s.projects);
   const tier            = useLicenseStore((s) => s.tier);
+  const lockedProjectIds = useMemo(
+    () => isPro(tier) ? new Set<number>() : lockedFreeProjectIds(projects),
+    [projects, tier],
+  );
 
   const [expandedApps, setExpandedApps] = useState<Set<string>>(() => new Set());
   const [expandedCtx,  setExpandedCtx]  = useState<Set<string>>(() => new Set());
@@ -630,6 +635,8 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
   const [selectedActivityIds, setSelectedActivityIds] = useState<Set<number>>(() => new Set());
   const [bulkAssignProjectId, setBulkAssignProjectId] = useState<string>('');
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [viewMode, setViewMode] = useState<'summary' | 'details'>('summary');
 
   // ── edit state ────────────────────────────────────────────────────────
@@ -640,8 +647,10 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const [editStart,  setEditStart]  = useState('');
   const [editEnd,    setEditEnd]    = useState('');
   const [saving,     setSaving]     = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const openEdit = (a: Activity, activityIds: number[] = [a.id]) => {
+    setEditError(null);
     setEditingTarget({ base: a, activityIds });
     setEditTitle(displayAppName(a.app_name));
     setEditNote(a.window_title ?? '');
@@ -660,7 +669,25 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
 
   const saveEdit = async () => {
     if (!editingTarget || saving) return;
+    const requestedProjectId = editProject === MIXED_PROJECT_VALUE
+      ? undefined
+      : editProject
+        ? parseInt(editProject, 10)
+        : null;
+    const currentProjectIds = new Set(editingTarget.activityIds.map((id) => {
+      const currentActivity = activities.find((activity) => activity.id === id);
+      return currentActivity
+        ? currentActivity.project_id
+        : id === editingTarget.base.id ? editingTarget.base.project_id : null;
+    }));
+    const assignmentChanged = requestedProjectId !== undefined
+      && (currentProjectIds.size !== 1 || !currentProjectIds.has(requestedProjectId));
+    if (assignmentChanged && requestedProjectId != null && lockedProjectIds.has(requestedProjectId)) {
+      setEditError('This project is locked on the Free plan. Choose one of your first three projects or remove the assignment.');
+      return;
+    }
     setSaving(true);
+    setEditError(null);
     try {
       if (editingTarget.activityIds.length > 1) {
         const nextAppName = editTitle.trim() || editingTarget.base.app_name;
@@ -670,46 +697,77 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
         await Promise.all(editingTarget.activityIds.map((id) => {
           const activity = activityMap.get(id);
           if (!activity) return Promise.resolve();
-          const endTs = activity.ended_at ?? (activity.started_at + (activity.duration_s ?? 0));
-          return updateActivity(id, nextAppName, nextWindowTitle, activity.started_at, endTs);
+          const originalStart = activity.original_started_at ?? activity.started_at;
+          const originalEnd = activity.original_ended_at
+            ?? (originalStart + (activity.original_duration_s ?? activity.duration_s ?? 0));
+          return updateActivity(id, nextAppName, nextWindowTitle, originalStart, originalEnd);
         }));
-        if (editProject !== MIXED_PROJECT_VALUE) {
-          if (editProject) {
-            await assignActivitiesToProject(editingTarget.activityIds, parseInt(editProject, 10));
+        if (assignmentChanged && requestedProjectId !== undefined) {
+          if (requestedProjectId != null) {
+            await assignActivitiesToProject(editingTarget.activityIds, requestedProjectId);
           } else {
             await Promise.all(editingTarget.activityIds.map((id) => unassignFromProject(id)));
           }
         }
       } else {
-        const base = fromUnixTime(editingTarget.base.started_at);
-        const [sh, sm] = editStart.split(':').map(Number);
-        const [eh, em] = editEnd.split(':').map(Number);
-        const sDate = new Date(base); sDate.setHours(sh, sm, 0, 0);
-        const eDate = new Date(base); eDate.setHours(eh, em, 0, 0);
-        let s = Math.floor(sDate.getTime() / 1000);
-        let e = Math.floor(eDate.getTime() / 1000);
-        if (e < s) e += 86400;
+        let s: number;
+        let e: number;
+        if (editingTarget.base.time_clipped) {
+          s = editingTarget.base.original_started_at ?? editingTarget.base.started_at;
+          e = editingTarget.base.original_ended_at
+            ?? (s + (editingTarget.base.original_duration_s ?? editingTarget.base.duration_s ?? 0));
+        } else {
+          const base = fromUnixTime(editingTarget.base.started_at);
+          const [sh, sm] = editStart.split(':').map(Number);
+          const [eh, em] = editEnd.split(':').map(Number);
+          const sDate = new Date(base); sDate.setHours(sh, sm, 0, 0);
+          const eDate = new Date(base); eDate.setHours(eh, em, 0, 0);
+          s = Math.floor(sDate.getTime() / 1000);
+          e = Math.floor(eDate.getTime() / 1000);
+          if (e < s) e += 86400;
+        }
         await updateActivity(editingTarget.base.id, editTitle.trim() || editingTarget.base.app_name, editNote.trim(), s, e);
-        if (editProject) await assignToProject(editingTarget.base.id, parseInt(editProject, 10));
-        else await unassignFromProject(editingTarget.base.id);
+        if (assignmentChanged && requestedProjectId !== undefined) {
+          if (requestedProjectId != null) await assignToProject(editingTarget.base.id, requestedProjectId);
+          else await unassignFromProject(editingTarget.base.id);
+        }
       }
       setEditingTarget(null);
+    } catch (error) {
+      setEditError(errorMessage(error, 'The activity changes could not be saved.'));
     } finally {
       setSaving(false);
     }
   };
 
   // Toast notification
-  const [toast, setToast] = useState<{ msg: string; color: string } | null>(null);
+  const [toast, setToast] = useState<{ msg: string; color: string; kind: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = useCallback((projectName: string, color: string, count: number) => {
+  const showTimedToast = useCallback((nextToast: { msg: string; color: string; kind: 'success' | 'error' }) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    setToast({
+    setToast(nextToast);
+    toastTimer.current = setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  const showToast = useCallback((projectName: string, color: string, count: number) => {
+    showTimedToast({
       msg: `${count} activit${count === 1 ? 'y' : 'ies'} assigned to ${projectName}`,
       color,
+      kind: 'success',
     });
-    toastTimer.current = setTimeout(() => setToast(null), 2600);
+  }, [showTimedToast]);
+
+  const showErrorToast = useCallback((error: unknown, fallback: string) => {
+    showTimedToast({
+      msg: errorMessage(error, fallback),
+      color: '#f87171',
+      kind: 'error',
+    });
+  }, [showTimedToast]);
+
+  useEffect(() => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
 
   // Timeline state
@@ -754,10 +812,15 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   }, [activities]);
 
   useEffect(() => {
-    if (selectedActivityIds.size === 0 && bulkAssignProjectId) {
+    const bulkProjectId = Number(bulkAssignProjectId);
+    if (
+      bulkAssignProjectId
+      && (selectedActivityIds.size === 0 || lockedProjectIds.has(bulkProjectId))
+    ) {
       setBulkAssignProjectId('');
     }
-  }, [selectedActivityIds, bulkAssignProjectId]);
+    setBulkDeleteConfirm(false);
+  }, [selectedActivityIds, bulkAssignProjectId, lockedProjectIds]);
 
   const tree = buildTree(activities);
 
@@ -783,6 +846,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
   const clearSelectedActivities = useCallback(() => {
     setSelectedActivityIds(new Set());
     setBulkAssignProjectId('');
+    setBulkDeleteConfirm(false);
   }, []);
   const selectAllActivities = useCallback(() => {
     setSelectedActivityIds(new Set(activities.map((activity) => activity.id)));
@@ -796,36 +860,75 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
     return ids;
   }, [selectedActivityIds]);
 
-  const handleDrop = useCallback(async (projectId: number, ids: number[]) => {
-    if (projectId < 1 || ids.length === 0) return;
-    await assignActivitiesToProject(ids, projectId);
-    const proj = projects.find((p) => p.id === projectId);
-    if (proj) showToast(proj.name, proj.color, ids.length);
-    if (ids.some((id) => selectedActivityIds.has(id))) {
-      clearSelectedActivities();
+  const handleDrop = useCallback(async (projectId: number, ids: number[]): Promise<boolean> => {
+    if (projectId < 1 || ids.length === 0) return false;
+    if (lockedProjectIds.has(projectId)) {
+      showErrorToast(
+        'This project is locked on the Free plan.',
+        'This project is locked on the Free plan.',
+      );
+      return false;
     }
-  }, [assignActivitiesToProject, clearSelectedActivities, projects, selectedActivityIds, showToast]);
+    try {
+      await assignActivitiesToProject(ids, projectId);
+      const proj = projects.find((p) => p.id === projectId);
+      if (proj) showToast(proj.name, proj.color, ids.length);
+      if (ids.some((id) => selectedActivityIds.has(id))) {
+        clearSelectedActivities();
+      }
+      return true;
+    } catch (error) {
+      showErrorToast(error, 'The activities could not be assigned.');
+      return false;
+    }
+  }, [assignActivitiesToProject, clearSelectedActivities, lockedProjectIds, projects, selectedActivityIds, showErrorToast, showToast]);
 
   const handleBulkClearProject = useCallback(async () => {
     const ids = Array.from(selectedActivityIds);
     if (ids.length === 0) return;
-    await Promise.all(ids.map((id) => unassignFromProject(id)));
-    clearSelectedActivities();
-  }, [clearSelectedActivities, selectedActivityIds, unassignFromProject]);
+    try {
+      await Promise.all(ids.map((id) => unassignFromProject(id)));
+      clearSelectedActivities();
+    } catch (error) {
+      showErrorToast(error, 'The project assignments could not be removed.');
+    }
+  }, [clearSelectedActivities, selectedActivityIds, showErrorToast, unassignFromProject]);
+
+  const handleDeleteActivities = useCallback(async (ids: number[]) => {
+    if (ids.length === 0) return;
+    try {
+      await Promise.all(ids.map((id) => deleteActivity(id)));
+      setDeleteConfirmKey(null);
+    } catch (error) {
+      showErrorToast(error, 'The selected activities could not be deleted.');
+    }
+  }, [deleteActivity, showErrorToast]);
+
   const handleBulkDelete = useCallback(async () => {
     const ids = Array.from(selectedActivityIds);
-    if (ids.length === 0) return;
-    await Promise.all(ids.map((id) => deleteActivity(id)));
-    clearSelectedActivities();
-  }, [clearSelectedActivities, deleteActivity, selectedActivityIds]);
+    if (ids.length === 0 || bulkDeleting) return;
+    if (!bulkDeleteConfirm) {
+      setBulkDeleteConfirm(true);
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      await Promise.all(ids.map((id) => deleteActivity(id)));
+      clearSelectedActivities();
+    } catch (error) {
+      showErrorToast(error, 'The selected activities could not be deleted.');
+      setBulkDeleteConfirm(false);
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [bulkDeleteConfirm, bulkDeleting, clearSelectedActivities, deleteActivity, selectedActivityIds, showErrorToast]);
 
   const handleBulkAssignSelected = useCallback(async () => {
     const projectId = parseInt(bulkAssignProjectId, 10);
     const ids = Array.from(selectedActivityIds);
     if (!projectId || ids.length === 0) return;
     await handleDrop(projectId, ids);
-    clearSelectedActivities();
-  }, [bulkAssignProjectId, selectedActivityIds, handleDrop, clearSelectedActivities]);
+  }, [bulkAssignProjectId, selectedActivityIds, handleDrop]);
 
   // Ghost pill state (shown while pointer-dragging)
   const [ghost, setGhost] = useState<{ x: number; y: number; count: number } | null>(null);
@@ -1048,10 +1151,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                       <ActivityDeleteControl
                         confirm={deleteConfirmKey === `app:${app.appName}`}
                         onConfirmChange={(confirm) => setDeleteConfirmKey(confirm ? `app:${app.appName}` : null)}
-                        onDelete={() => {
-                          app.activityIds.forEach((id) => deleteActivity(id));
-                          setDeleteConfirmKey(null);
-                        }}
+                        onDelete={() => void handleDeleteActivities(app.activityIds)}
                       />
                     </div>
                   );
@@ -1105,10 +1205,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                           <ActivityDeleteControl
                             confirm={deleteConfirmKey === `ctx:${ctxKey}`}
                             onConfirmChange={(confirm) => setDeleteConfirmKey(confirm ? `ctx:${ctxKey}` : null)}
-                            onDelete={() => {
-                              ctx.activityIds.forEach((id) => deleteActivity(id));
-                              setDeleteConfirmKey(null);
-                            }}
+                            onDelete={() => void handleDeleteActivities(ctx.activityIds)}
                           />
                         </div>
                       )}
@@ -1139,7 +1236,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                               onToggleSelect={() => toggleSelectedActivityIds(tg.activityIds)}
                               onToggle={tg.activityIds.length > 1 ? () => toggleTitle(titleKey) : undefined}
                               onEdit={editableActivity ? () => openEdit(editableActivity, tg.activityIds) : undefined}
-                              onDelete={() => Promise.all(tg.activityIds.map((id) => deleteActivity(id)))}
+                              onDelete={() => void handleDeleteActivities(tg.activityIds)}
                               onHover={() => highlightActivityIds(tg.activityIds)}
                               onHoverEnd={clearActivityHighlight}
                             />
@@ -1155,7 +1252,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
                                   selectionState={getSelectionState([activity.id], selectedActivityIds)}
                                   onToggleSelect={() => toggleSelectedActivityIds([activity.id])}
                                   onEdit={() => openEdit(activity)}
-                                  onDelete={() => deleteActivity(activity.id)}
+                                  onDelete={() => void handleDeleteActivities([activity.id])}
                                   onHover={() => highlightActivityIds([activity.id])}
                                   onHoverEnd={clearActivityHighlight}
                                 />
@@ -1305,7 +1402,7 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
 
       {/* Success toast */}
       {toast && createPortal(
-        <div style={{
+        <div role={toast.kind === 'error' ? 'alert' : 'status'} aria-live="polite" style={{
           position: 'fixed', bottom: selectedActivityIds.size > 0 ? 104 : 24, left: '50%', transform: 'translateX(-50%)',
           zIndex: 4000, pointerEvents: 'none',
           display: 'flex', alignItems: 'center', gap: 9,
@@ -1320,7 +1417,13 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
         }}>
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <circle cx="7" cy="7" r="7" fill={toast.color} opacity="0.25" />
-            <path d="M4 7l2 2 4-4" stroke={toast.color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d={toast.kind === 'success' ? 'M4 7l2 2 4-4' : 'M4.5 4.5l5 5m0-5l-5 5'}
+              stroke={toast.color}
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
           <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.88)', fontWeight: 500 }}>
             {toast.msg}
@@ -1361,7 +1464,11 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
               onChange={setBulkAssignProjectId}
               options={[
                 { value: '', label: 'Assign to…' },
-                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+                ...projects.map((p) => ({
+                  value: String(p.id),
+                  label: lockedProjectIds.has(p.id) ? `${p.name} (locked on Free)` : p.name,
+                  disabled: lockedProjectIds.has(p.id),
+                })),
               ]}
               placeholder="Assign to…"
               style={{ minWidth: 160, fontSize: 11.5 }}
@@ -1382,18 +1489,24 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
               No project
             </button>
             <button
+              type="button"
               className="btn-secondary"
               onClick={() => void handleBulkDelete()}
+              disabled={bulkDeleting}
               style={{
                 width: 'auto',
                 fontSize: 11.5,
                 padding: '6px 12px',
                 color: 'rgba(248,113,113,0.92)',
-                borderColor: 'rgba(239,68,68,0.26)',
-                background: 'rgba(239,68,68,0.08)',
+                borderColor: bulkDeleteConfirm ? 'rgba(239,68,68,0.55)' : 'rgba(239,68,68,0.26)',
+                background: bulkDeleteConfirm ? 'rgba(239,68,68,0.18)' : 'rgba(239,68,68,0.08)',
               }}
             >
-              Delete
+              {bulkDeleting
+                ? 'Deleting…'
+                : bulkDeleteConfirm
+                  ? `Confirm delete ${selectedActivityIds.size}`
+                  : 'Delete'}
             </button>
             <button
               className="btn-secondary"
@@ -1451,12 +1564,21 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
               options={[
                 ...(editingTarget.activityIds.length > 1 ? [{ value: MIXED_PROJECT_VALUE, label: 'Keep existing projects' }] : []),
                 { value: '', label: 'No project' },
-                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+                ...projects.map((p) => ({
+                  value: String(p.id),
+                  label: lockedProjectIds.has(p.id) ? `${p.name} (locked on Free)` : p.name,
+                  disabled: lockedProjectIds.has(p.id),
+                })),
               ]}
               placeholder="No project"
             />
           </div>
-          {editingTarget.activityIds.length === 1 ? (
+          {editError && (
+            <div role="alert" style={{ fontSize: 11.5, color: 'rgba(248,113,113,0.9)', lineHeight: 1.45 }}>
+              {editError}
+            </div>
+          )}
+          {editingTarget.activityIds.length === 1 && !editingTarget.base.time_clipped ? (
             <div style={{ display: 'flex', gap: 10 }}>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <FieldLabel>Start</FieldLabel>
@@ -1469,7 +1591,9 @@ export function ActivityPage({ onUpgrade }: { onUpgrade: () => void }) {
             </div>
           ) : (
             <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.38)', lineHeight: 1.45 }}>
-              Changes will be applied to all {editingTarget.activityIds.length} activities in this row. Time fields are hidden because each activity keeps its own original timing.
+              {editingTarget.base.time_clipped
+                ? 'This activity crosses the selected day boundary. Its original timing will be preserved while you edit its title or project.'
+                : `Changes will be applied to all ${editingTarget.activityIds.length} activities in this row. Time fields are hidden because each activity keeps its own original timing.`}
             </div>
           )}
           <div style={{ display: 'flex', gap: 8 }}>
