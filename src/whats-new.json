@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.1.0",
+      "title": "A Clearer Day, Smarter Rules",
+      "summary": "Duskry now turns busy activity into clear work blocks, makes automation easier to control, and keeps paid access dependable.",
+      "items": [
+        {
+          "icon": "Clock3",
+          "text": "Rapid app switches are grouped into clear work blocks, with the full app mix available when you need it."
+        },
+        {
+          "icon": "Eye",
+          "text": "Needs attention highlights uncertain activity and suggests likely projects for faster review."
+        },
+        {
+          "icon": "SlidersHorizontal",
+          "text": "Rules has a dedicated workspace with Off, Ask me, and Autopilot modes, plus clear evidence for learned patterns."
+        },
+        {
+          "icon": "Sun",
+          "text": "The window now has a calmer translucent treatment."
+        }
+      ]
+    },
+    {
       "version": "1.0.7",
       "title": "Reliable Subscriptions and Cleaner Activity",
       "summary": "Duskry now keeps paid subscriptions refreshed and makes busy days easier to understand.",

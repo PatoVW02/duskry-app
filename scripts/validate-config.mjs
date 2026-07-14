@@ -18,11 +18,27 @@ function loadDotEnv(file) {
 const env = { ...loadDotEnv(path.join(root, '.env')), ...process.env };
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const tauri = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+const whatsNew = JSON.parse(fs.readFileSync(path.join(root, 'src', 'whats-new.json'), 'utf8'));
 const cargo = fs.readFileSync(path.join(root, 'src-tauri', 'Cargo.toml'), 'utf8');
 const cargoVersion = cargo.match(/\[package\][\s\S]*?\nversion\s*=\s*"([^"]+)"/)?.[1];
 const errors = [];
 
 if (pkg.version !== tauri.version || pkg.version !== cargoVersion) errors.push(`Version mismatch: package=${pkg.version}, tauri=${tauri.version}, cargo=${cargoVersion ?? 'missing'}`);
+
+const currentWhatsNew = Array.isArray(whatsNew.versions)
+  ? whatsNew.versions.find((entry) => entry?.version === pkg.version)
+  : null;
+if (!currentWhatsNew) {
+  errors.push(`Missing What's New entry for version ${pkg.version}`);
+} else {
+  if (!currentWhatsNew.title?.trim()) errors.push(`What's New title is empty for version ${pkg.version}`);
+  if (!currentWhatsNew.summary?.trim()) errors.push(`What's New summary is empty for version ${pkg.version}`);
+  if (!Array.isArray(currentWhatsNew.items) || currentWhatsNew.items.length === 0) {
+    errors.push(`What's New items are empty for version ${pkg.version}`);
+  } else if (currentWhatsNew.items.some((item) => !item?.icon?.trim() || !item?.text?.trim())) {
+    errors.push(`What's New contains an incomplete item for version ${pkg.version}`);
+  }
+}
 
 const webBilling = env.VITE_BILLING_PLANS_ENABLED ?? 'true';
 const nativeBilling = env.DUSKRY_BILLING_PLANS_ENABLED ?? 'true';

@@ -1,6 +1,11 @@
 @import "tailwindcss";
 
 /* ── Base ───────────────────────────────────────────── */
+:root {
+  --window-scene-opacity: 0.78;
+  --window-scrim: rgba(4, 10, 16, 0.46);
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body, #root {
@@ -105,13 +110,15 @@ button,
   position: absolute;
   inset: 0;
   z-index: 0;
+  opacity: var(--window-scene-opacity);
+  pointer-events: none;
 }
 
 .scene-overlay {
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: rgba(4, 10, 16, 0.48);
+  background: var(--window-scrim);
 }
 
 .app-content {
@@ -964,6 +971,37 @@ button,
   color: rgba(251, 191, 36, 0.8);
   font-size: 11px;
   font-weight: 500;
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :root {
+    --window-scene-opacity: 1;
+    --window-scrim: rgba(4, 10, 16, 0.62);
+  }
+
+  .glass-card,
+  .glass-sidebar,
+  .glass-stat,
+  .glass-topbar,
+  .today-tracking-bar,
+  .today-timeline-panel,
+  .attention-panel {
+    background: rgb(8, 18, 24);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .glass-card,
+  .glass-sidebar,
+  .glass-stat,
+  .glass-topbar {
+    background: Canvas;
+    border-color: CanvasText;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 /* ── Color picker ────────────────────────────────────── */

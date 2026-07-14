@@ -11,7 +11,7 @@ export function OnboardingShell({ children, step, total, cardStyle }: Props) {
   return (
     <div className="onboarding-overlay">
       <SceneBackground />
-      <div className="scene-overlay" />
+      <div className="scene-overlay" data-tauri-drag-region />
       <div className="onboarding-card glass-card" style={{ position: 'relative', zIndex: 2, ...cardStyle }}>
         <div className="step-dots">
           {Array.from({ length: total }).map((_, i) => (

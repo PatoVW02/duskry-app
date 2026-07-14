@@ -41,7 +41,7 @@ export function SceneBackground() {
     : scene;
 
   return (
-    <div className="scene-layer">
+    <div className="scene-layer" aria-hidden="true">
       {SCENES[(scenePreviewMode && scenePreviewScene) ? scenePreviewScene : activeScene] ?? SCENES['night-mountains']}
     </div>
   );
