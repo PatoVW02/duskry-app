@@ -75,6 +75,22 @@ validate_bundle() {
   dmg=$(find "src-tauri/target/${target}/release/bundle/dmg" -name "*.dmg" | head -1)
   codesign --verify --deep --strict --verbose=2 "$app"
   xcrun stapler validate "$app"
+
+  echo "Submitting $(basename "$dmg") for DMG notarization"
+  if [ -n "${APPLE_API_ISSUER:-}" ] && [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+    xcrun notarytool submit "$dmg" \
+      --issuer "$APPLE_API_ISSUER" \
+      --key-id "$APPLE_API_KEY" \
+      --key "$APPLE_API_KEY_PATH" \
+      --wait
+  else
+    xcrun notarytool submit "$dmg" \
+      --apple-id "$APPLE_ID" \
+      --password "$APPLE_PASSWORD" \
+      --team-id "$APPLE_TEAM_ID" \
+      --wait
+  fi
+  xcrun stapler staple "$dmg"
   xcrun stapler validate "$dmg"
   spctl --assess --type execute --verbose=2 "$app"
   spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
