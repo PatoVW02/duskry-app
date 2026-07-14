@@ -903,11 +903,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                if !REAL_QUIT_REQUESTED.swap(false, Ordering::SeqCst) {
-                    api.prevent_exit();
-                    hide_main_window(app_handle);
-                }
+            tauri::RunEvent::ExitRequested { api, .. }
+                if !REAL_QUIT_REQUESTED.swap(false, Ordering::SeqCst) =>
+            {
+                api.prevent_exit();
+                hide_main_window(app_handle);
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen {
