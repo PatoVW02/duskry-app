@@ -33,13 +33,16 @@ describe('atomic cross-platform release flow', () => {
     expect(windowsRelease).toContain('npm run check:config -- --production');
   });
 
-  it('refuses to publish unsigned Windows installers', () => {
+  it('allows explicitly unsigned Windows installers but rejects partial signing configuration', () => {
     expect(windowsRelease).toContain('secrets.WINDOWS_CERTIFICATE');
     expect(windowsRelease).toContain('secrets.WINDOWS_CERTIFICATE_PASSWORD');
     expect(windowsRelease).toContain('vars.WINDOWS_TIMESTAMP_URL');
     expect(windowsRelease).toContain('Import-PfxCertificate');
     expect(windowsRelease).toContain('certificateThumbprint = $certificate.Thumbprint');
-    expect(windowsRelease).toContain('Refusing to publish unsigned Windows installers.');
+    expect(windowsRelease).toContain('All Windows code-signing inputs are absent. Building explicitly unsigned installers.');
+    expect(windowsRelease).toContain('Windows signing is partially configured. Missing:');
+    expect(windowsRelease).toContain('- name: Mark Windows installers as unsigned');
+    expect(windowsRelease).toContain('The Windows installers in this release are not Authenticode-signed yet.');
   });
 
   it('fails closed unless every updater platform is present', () => {
