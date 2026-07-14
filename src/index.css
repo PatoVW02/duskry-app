@@ -4,6 +4,16 @@
 :root {
   --window-scene-opacity: 0.78;
   --window-scrim: rgba(4, 10, 16, 0.46);
+  --window-solid-background: rgb(5, 13, 19);
+}
+
+/*
+ * Start with a deterministic backdrop and opt into native material only after
+ * the backend confirms that the current OS supports the configured effect.
+ * This keeps Windows 10 readable when Tauri silently rejects Windows 11 Mica.
+ */
+html[data-window-material='solid'] {
+  background: var(--window-solid-background);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -993,6 +1003,10 @@ button,
 }
 
 @media (forced-colors: active) {
+  html[data-window-material='solid'] {
+    background: Canvas;
+  }
+
   .glass-card,
   .glass-sidebar,
   .glass-stat,

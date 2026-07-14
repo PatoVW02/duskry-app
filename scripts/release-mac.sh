@@ -35,6 +35,7 @@ trap 'rm -rf "${TMP}"' EXIT
 
 node scripts/sync-tauri-config.mjs
 node scripts/validate-config.mjs --release-mac
+node scripts/render-release-notes.mjs "${VERSION}" "${TMP}/release-notes.md"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "Error: the release worktree is not clean. Commit the complete release changes before publishing."
@@ -67,12 +68,24 @@ if [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "$CERT_TEAM_ID" ] && [ "$APPLE_TEAM_ID" !
   exit 1
 fi
 
+find_built_dmg() {
+  local target="$1"
+  local bundle_dir="src-tauri/target/${target}/release/bundle/dmg"
+  local dmg
+  dmg=$(find "$bundle_dir" -maxdepth 1 -type f -name "Duskry_${VERSION}_*.dmg" -print -quit 2>/dev/null)
+  if [ -z "$dmg" ]; then
+    echo "Error: no Duskry ${VERSION} DMG found for ${target}." >&2
+    return 1
+  fi
+  printf '%s\n' "$dmg"
+}
+
 validate_bundle() {
   local target="$1"
   local app
   local dmg
   app=$(find "src-tauri/target/${target}/release/bundle/macos" -name "*.app" | head -1)
-  dmg=$(find "src-tauri/target/${target}/release/bundle/dmg" -name "*.dmg" | head -1)
+  dmg=$(find_built_dmg "$target")
   codesign --verify --deep --strict --verbose=2 "$app"
   xcrun stapler validate "$app"
 
@@ -102,7 +115,7 @@ echo "▶ Building Duskry ${TAG} for macOS"
 echo "▶ Building arm64"
 npm run tauri build -- --target aarch64-apple-darwin
 validate_bundle aarch64-apple-darwin
-DMG=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+DMG=$(find_built_dmg aarch64-apple-darwin)
 cp "$DMG" "${TMP}/Duskry_arm64.dmg"
 echo "  arm64 DMG: ${DMG}"
 
@@ -110,7 +123,7 @@ echo "  arm64 DMG: ${DMG}"
 echo "▶ Building x64"
 npm run tauri build -- --target x86_64-apple-darwin
 validate_bundle x86_64-apple-darwin
-DMG=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+DMG=$(find_built_dmg x86_64-apple-darwin)
 cp "$DMG" "${TMP}/Duskry_x64.dmg"
 echo "  x64 DMG: ${DMG}"
 
@@ -118,7 +131,7 @@ echo "  x64 DMG: ${DMG}"
 echo "▶ Building universal"
 npm run tauri build -- --target universal-apple-darwin
 validate_bundle universal-apple-darwin
-DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+DMG=$(find_built_dmg universal-apple-darwin)
 cp "$DMG" "${TMP}/Duskry_universal.dmg"
 echo "  universal DMG: ${DMG}"
 
@@ -164,13 +177,7 @@ git push origin "${TAG}"
 
 gh release create "${TAG}" \
   --title "Duskry ${TAG}" \
-  --notes "## What's new
-
-See the assets below to download and install Duskry.
-
-**macOS**: Download the signed and notarized \`.dmg\` file for your chip.
-
-**Windows**: Download the \`.msi\` or \`.exe\` installer (built by CI)"
+  --notes-file "${TMP}/release-notes.md"
 
 echo "▶ Uploading Mac assets"
 gh release upload "${TAG}" "${TMP}/Duskry_arm64.dmg" --clobber

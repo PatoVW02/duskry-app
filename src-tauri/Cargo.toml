@@ -1,6 +1,6 @@
 [package]
 name = "duskry"
-version = "1.1.0"
+version = "1.1.1"
 description = "Duskry desktop time tracker"
 authors = ["Duskry"]
 edition = "2021"
@@ -47,4 +47,5 @@ windows = { version = "0.58", features = [
     "Win32_System_ProcessStatus",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_SystemInformation",
+    "Wdk_System_SystemServices",
 ] }

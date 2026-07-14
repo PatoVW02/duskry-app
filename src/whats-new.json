@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.1.1",
+      "title": "A Steadier, Simpler Workspace",
+      "summary": "Duskry now keeps open work in place during live updates, simplifies Projects, and strengthens Windows support.",
+      "items": [
+        {
+          "icon": "Clock3",
+          "text": "Expanded work blocks stay open while fresh activity data arrives."
+        },
+        {
+          "icon": "FolderOpen",
+          "text": "Projects now focuses on project setup and activity; rule management lives in the dedicated Rules page."
+        },
+        {
+          "icon": "Sun",
+          "text": "Windows 10 uses a consistent dark fallback, while Windows 11 keeps native Mica translucency."
+        },
+        {
+          "icon": "CheckSquare",
+          "text": "Windows builds are now verified before release alongside the existing frontend and Rust checks."
+        }
+      ]
+    },
+    {
       "version": "1.1.0",
       "title": "A Clearer Day, Smarter Rules",
       "summary": "Duskry now turns busy activity into clear work blocks, makes automation easier to control, and keeps paid access dependable.",

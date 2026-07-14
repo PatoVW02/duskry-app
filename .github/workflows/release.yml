@@ -33,6 +33,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Render version-specific release notes
+        shell: bash
+        run: node scripts/render-release-notes.mjs "${GITHUB_REF_NAME#v}" release-notes.md
+
       - name: Build and publish Windows release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -83,5 +87,11 @@ jobs:
           else
             echo "mac-latest.json not found — latest.json will be Windows-only"
           fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish version-specific release notes
+        shell: bash
+        run: gh release edit "${{ github.ref_name }}" --notes-file release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

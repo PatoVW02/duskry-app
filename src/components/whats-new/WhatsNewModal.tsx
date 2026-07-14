@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  CheckSquare,
   Clock3,
   Eye,
+  FolderOpen,
   MousePointerClick,
   SlidersHorizontal,
   Sparkles,
@@ -29,8 +31,10 @@ interface WhatsNewEntry {
 const RELEASES = (whatsNewData as { versions: WhatsNewEntry[] }).versions;
 const LAST_SEEN_KEY = 'last_seen_whats_new_version';
 const ICONS: Record<string, LucideIcon> = {
+  CheckSquare,
   Sun,
   Clock3,
+  FolderOpen,
   SlidersHorizontal,
   Eye,
   MousePointerClick,

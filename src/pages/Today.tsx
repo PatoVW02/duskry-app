@@ -18,7 +18,14 @@ import {
 } from 'lucide-react';
 import { FocusProjectSelect } from '../components/tracking/FocusProjectSelect';
 import { TrackerHealth } from '../components/tracking/TrackerHealth';
-import { groupActivitiesIntoBursts, countFocusedBlocks, type ActivityBurst } from '../lib/activityBursts';
+import {
+  countFocusedBlocks,
+  groupActivitiesIntoBursts,
+  nextBurstExpansionPreference,
+  resolveOpenBurstId,
+  type ActivityBurst,
+  type BurstExpansionPreference,
+} from '../lib/activityBursts';
 import { formatDuration } from '../lib/utils';
 import { useActivityStore } from '../stores/useActivityStore';
 import { useProjectStore, type Project } from '../stores/useProjectStore';
@@ -303,7 +310,7 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
   const error = useActivityStore((state) => state.error);
   const fetchToday = useActivityStore((state) => state.fetchToday);
   const projects = useProjectStore((state) => state.projects);
-  const [openBurstId, setOpenBurstId] = useState<string | false | null>(null);
+  const [openBurstId, setOpenBurstId] = useState<BurstExpansionPreference>(null);
   const [showLogTime, setShowLogTime] = useState(false);
 
   useEffect(() => {
@@ -316,7 +323,7 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
   const timeline = useMemo(() => [...bursts].reverse(), [bursts]);
   const attention = useMemo(() => timeline.filter((burst) => burst.needsAttention), [timeline]);
   const firstMultiAppId = timeline.find((burst) => burst.appSummaries.length > 1)?.id;
-  const effectiveOpenBurstId = openBurstId === null ? firstMultiAppId : openBurstId || undefined;
+  const effectiveOpenBurstId = resolveOpenBurstId(openBurstId, firstMultiAppId);
   const trackedSeconds = bursts.reduce((sum, burst) => sum + burst.durationS, 0);
 
   return (
@@ -375,7 +382,7 @@ export function Today({ onReview, onOpenPermissions }: TodayProps) {
                   expanded={effectiveOpenBurstId === burst.id}
                   onToggle={() => {
                     if (burst.appSummaries.length < 2) return;
-                    setOpenBurstId(effectiveOpenBurstId === burst.id ? false : burst.id);
+                    setOpenBurstId(nextBurstExpansionPreference(effectiveOpenBurstId, burst.id));
                   }}
                 />
               ))}

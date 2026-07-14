@@ -8,6 +8,7 @@ mod permissions;
 mod rules;
 mod tracker;
 mod tray;
+mod window_material;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
@@ -636,6 +637,11 @@ fn get_os() -> &'static str {
 }
 
 #[tauri::command]
+fn get_window_material_mode() -> &'static str {
+    window_material::current_mode()
+}
+
+#[tauri::command]
 fn check_accessibility() -> bool {
     permissions::check_accessibility()
 }
@@ -872,6 +878,7 @@ pub fn run() {
             cancel_trial,
             downgrade_to_free,
             get_os,
+            get_window_material_mode,
             check_accessibility,
             request_accessibility,
             check_screen_recording,

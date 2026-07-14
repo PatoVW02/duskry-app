@@ -27,6 +27,26 @@ export interface ActivityBurst {
   suggestionReason: string | null;
 }
 
+/**
+ * `null` means the UI may choose its initial open burst, `false` records an
+ * explicit user close, and a string records an explicit user selection.
+ */
+export type BurstExpansionPreference = string | false | null;
+
+export function resolveOpenBurstId(
+  preference: BurstExpansionPreference,
+  defaultBurstId?: string,
+): string | undefined {
+  return preference === null ? defaultBurstId : preference || undefined;
+}
+
+export function nextBurstExpansionPreference(
+  currentOpenBurstId: string | undefined,
+  toggledBurstId: string,
+): string | false {
+  return currentOpenBurstId === toggledBurstId ? false : toggledBurstId;
+}
+
 function activityEnd(activity: Activity): number {
   return activity.ended_at ?? activity.started_at + Math.max(activity.duration_s ?? 0, 1);
 }
@@ -81,7 +101,7 @@ function inferSuggestedProject(
 }
 
 function createBurst(activities: Activity[], allActivities: Activity[]): ActivityBurst {
-  const sorted = [...activities].sort((a, b) => a.started_at - b.started_at);
+  const sorted = [...activities].sort(compareActivities);
   const durations = new Map<string, { durationS: number; activityCount: number }>();
   for (const activity of sorted) {
     const summary = durations.get(activity.app_name) ?? { durationS: 0, activityCount: 0 };
@@ -110,7 +130,11 @@ function createBurst(activities: Activity[], allActivities: Activity[]): Activit
     : { projectId: null, reason: null };
 
   return {
-    id: `${sorted[0].started_at}-${sorted.map((activity) => activity.id).join('-')}`,
+    // A periodic refresh replaces every Activity object and may append another
+    // quick switch to this burst. The first activity is the stable anchor that
+    // lets React preserve the open block (and any local child state) while its
+    // duration and members continue changing.
+    id: `burst-${sorted[0].id}`,
     activities: sorted,
     activityIds: sorted.map((activity) => activity.id),
     startedAt: sorted[0].started_at,
@@ -135,7 +159,7 @@ function createBurst(activities: Activity[], allActivities: Activity[]): Activit
 export function groupActivitiesIntoBursts(activities: Activity[]): ActivityBurst[] {
   const sorted = [...activities]
     .filter((activity) => (activity.duration_s ?? 0) > 0)
-    .sort((a, b) => a.started_at - b.started_at);
+    .sort(compareActivities);
   const groups: Activity[][] = [];
 
   for (const activity of sorted) {
@@ -153,4 +177,8 @@ export function groupActivitiesIntoBursts(activities: Activity[]): ActivityBurst
 
 export function countFocusedBlocks(bursts: ActivityBurst[]): number {
   return bursts.filter((burst) => burst.projectId !== null && burst.durationS >= 15 * 60).length;
+}
+
+function compareActivities(left: Activity, right: Activity): number {
+  return left.started_at - right.started_at || left.id - right.id;
 }
