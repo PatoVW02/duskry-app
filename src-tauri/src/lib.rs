@@ -566,20 +566,8 @@ fn save_file(content: String, filename: String) -> Result<String, String> {
         return Err("Invalid export filename".to_string());
     }
 
-    #[cfg(target_os = "macos")]
-    let dir = {
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        format!("{}/Downloads", home)
-    };
-    #[cfg(target_os = "windows")]
-    let dir = {
-        let profile = std::env::var("USERPROFILE").map_err(|e| e.to_string())?;
-        format!("{}\\Downloads", profile)
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let dir = return Err("Unsupported platform".to_string());
-
-    let path = format!("{}/{}", dir, filename);
+    let dir = dirs::download_dir().ok_or_else(|| "Downloads folder is unavailable".to_string())?;
+    let path = dir.join(filename);
     std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open")
@@ -588,9 +576,10 @@ fn save_file(content: String, filename: String) -> Result<String, String> {
         .spawn();
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("explorer")
-        .args(["/select,", &path])
+        .arg("/select,")
+        .arg(&path)
         .spawn();
-    Ok(path)
+    Ok(path.to_string_lossy().into_owned())
 }
 
 // ─── App entry ──────────────────────────────────────────────────────────────
@@ -707,14 +696,12 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen {
-                has_visible_windows,
+                has_visible_windows: false,
                 ..
             } => {
-                if !has_visible_windows {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
             }
             _ => {}

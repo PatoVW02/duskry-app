@@ -1,5 +1,8 @@
 /// Send a macOS/Windows system notification.
 pub fn send_notification(title: &str, body: &str) {
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = (title, body);
+
     #[cfg(target_os = "macos")]
     {
         let safe_body = body.replace('\\', "\\\\").replace('"', "\\\"");

@@ -385,7 +385,7 @@ fn tracking_worker_loop(generation: u64) {
 
             // Browser tabs can navigate without changing the window title. Refresh
             // their URL every 15 seconds so domain rules and reports do not go stale.
-            let should_refresh_url = window_changed || tick_count % 3 == 0;
+            let should_refresh_url = window_changed || tick_count.is_multiple_of(3);
             if should_refresh_url {
                 current.url = get_browser_url(&current.app_name);
                 if current.url.is_none() && !window_changed {
@@ -399,7 +399,7 @@ fn tracking_worker_loop(generation: u64) {
 
             // Periodic same-window tick log (every 15 s) so we can see the loop
             // is alive and what osascript is reporting even with no state changes.
-            if !changed && tick_count % 3 == 0 {
+            if !changed && tick_count.is_multiple_of(3) {
                 crate::logger::tlog(&format!(
                     "  tick: frontmost=\"{}\" title=\"{}\"  idle={}s  activity=#{}",
                     current.app_name,
@@ -530,6 +530,7 @@ pub fn get_current_window() -> Option<ActiveWindow> {
 ///       2. Focus project
 ///   - `rules_override_active_project = false`:
 ///       1. Focus project (always wins)
+///
 /// When no focus project is set, normal full-rules matching applies.
 fn determine_project(window: &ActiveWindow, rules: &[crate::db::Rule]) -> Option<i64> {
     let tier = crate::license::get_effective_tier();
@@ -658,7 +659,7 @@ end tell
     )?;
 
     let parts: Vec<&str> = result.splitn(3, '\u{1f}').collect();
-    let app_name = parts.get(0).unwrap_or(&"").trim().to_string();
+    let app_name = parts.first().unwrap_or(&"").trim().to_string();
     if app_name.is_empty() {
         return None;
     }
@@ -796,11 +797,7 @@ fn idle_secs_now() -> i64 {
         if let Some(pos) = s.find("HIDIdleTime") {
             let rest = &s[pos..];
             if let Some(eq) = rest.find('=') {
-                let num_str = rest[eq + 1..]
-                    .trim()
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("0");
+                let num_str = rest[eq + 1..].split_whitespace().next().unwrap_or("0");
                 if let Ok(ns) = num_str
                     .trim_end_matches(|c: char| !c.is_ascii_digit())
                     .parse::<u64>()

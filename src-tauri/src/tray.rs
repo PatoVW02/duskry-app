@@ -54,7 +54,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         };
         let item = CheckMenuItem::with_id(
             app,
-            &format!("project_{}", pid),
+            format!("project_{}", pid),
             &p.name,
             true,
             pid == active_id,

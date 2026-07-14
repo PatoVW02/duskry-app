@@ -27,7 +27,7 @@ struct RuleCondition {
 
 pub fn apply_rules(window: &ActiveWindow, rules: &[Rule]) -> Option<i64> {
     let mut matching: Vec<&Rule> = rules.iter().filter(|r| rule_matches(r, window)).collect();
-    matching.sort_by(|a, b| b.priority.cmp(&a.priority));
+    matching.sort_by_key(|rule| std::cmp::Reverse(rule.priority));
     matching.first().map(|r| r.project_id)
 }
 
@@ -40,7 +40,7 @@ pub fn apply_app_url_rules(window: &ActiveWindow, rules: &[Rule]) -> Option<i64>
                 && rule_matches(r, window)
         })
         .collect();
-    matching.sort_by(|a, b| b.priority.cmp(&a.priority));
+    matching.sort_by_key(|rule| std::cmp::Reverse(rule.priority));
     matching.first().map(|r| r.project_id)
 }
 

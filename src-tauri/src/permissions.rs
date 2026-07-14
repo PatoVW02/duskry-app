@@ -86,9 +86,3 @@ pub fn request_screen_recording() {
         }
     }
 }
-
-pub fn check_notifications() -> bool {
-    crate::db::get_setting("notifications_enabled")
-        .map(|v| v == "true")
-        .unwrap_or(false)
-}
