@@ -25,7 +25,7 @@ jobs:
       VITE_CHECKOUT_PROPLUS_YEARLY: https://duskry.lemonsqueezy.com/checkout/buy/c77a2394-ad5c-40f3-ae9e-cd8f73761d98
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
         uses: actions/setup-node@v4
