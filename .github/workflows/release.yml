@@ -238,14 +238,24 @@ jobs:
         run: |
           release_record=$(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-              | jq -c --arg tag "${GITHUB_REF_NAME}" '.[] | select(.tag_name == $tag)'
+              | jq -c \
+                  --arg tag "${GITHUB_REF_NAME}" \
+                  --arg name "Duskry ${GITHUB_REF_NAME}" \
+                  '.[] | select(.draft == true and (.tag_name == $tag or .name == $name))'
           )
-          release_id=$(jq -r 'select(.draft == true) | .id' <<<"${release_record}")
-          if [ -z "${release_id}" ]; then
-            echo "::error::Draft release ${GITHUB_REF_NAME} was not found."
+          release_count=$(grep -c . <<<"${release_record}" || true)
+          if [ "${release_count}" -ne 1 ]; then
+            echo "::error::Expected exactly one draft release for ${GITHUB_REF_NAME}; found ${release_count}."
             exit 1
           fi
-          jq -n --rawfile body release-notes.md '{body: $body}' \
+          release_id=$(jq -r '.id' <<<"${release_record}")
+          # GitHub can replace a draft's tag_name with an internal untagged-* value
+          # while actions update it. Reassert the intended tag whenever we patch it.
+          jq -n \
+              --arg tag "${GITHUB_REF_NAME}" \
+              --arg target "${GITHUB_SHA}" \
+              --rawfile body release-notes.md \
+              '{tag_name: $tag, target_commitish: $target, body: $body}' \
             | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --input - >/dev/null
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -255,14 +265,21 @@ jobs:
         run: |
           release_record=$(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-              | jq -c --arg tag "${GITHUB_REF_NAME}" '.[] | select(.tag_name == $tag)'
+              | jq -c \
+                  --arg tag "${GITHUB_REF_NAME}" \
+                  --arg name "Duskry ${GITHUB_REF_NAME}" \
+                  '.[] | select(.draft == true and (.tag_name == $tag or .name == $name))'
           )
-          release_id=$(jq -r 'select(.draft == true) | .id' <<<"${release_record}")
-          if [ -z "${release_id}" ]; then
-            echo "::error::Release ${GITHUB_REF_NAME} is no longer a draft; refusing to continue."
+          release_count=$(grep -c . <<<"${release_record}" || true)
+          if [ "${release_count}" -ne 1 ]; then
+            echo "::error::Expected exactly one draft release for ${GITHUB_REF_NAME}; found ${release_count}."
             exit 1
           fi
-          jq -n '{draft: false, make_latest: "true"}' \
+          release_id=$(jq -r '.id' <<<"${release_record}")
+          jq -n \
+              --arg tag "${GITHUB_REF_NAME}" \
+              --arg target "${GITHUB_SHA}" \
+              '{tag_name: $tag, target_commitish: $target, draft: false, make_latest: "true"}' \
             | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --input - >/dev/null
           echo "Published the complete cross-platform release ${GITHUB_REF_NAME}."
         env:

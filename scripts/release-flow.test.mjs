@@ -28,7 +28,9 @@ describe('atomic cross-platform release flow', () => {
     expect(mergeIndex).toBeGreaterThan(draftIndex);
     expect(notesIndex).toBeGreaterThan(mergeIndex);
     expect(publishIndex).toBeGreaterThan(notesIndex);
-    expect(windowsRelease.slice(publishIndex)).toContain('{draft: false, make_latest: "true"}');
+    expect(windowsRelease.slice(notesIndex)).toContain('.tag_name == $tag or .name == $name');
+    expect(windowsRelease.slice(publishIndex)).toContain('tag_name: $tag');
+    expect(windowsRelease.slice(publishIndex)).toContain('draft: false, make_latest: "true"');
     expect(windowsRelease).not.toContain('releaseDraft: false');
     expect(windowsRelease).toContain('npm run check:config -- --production');
   });
