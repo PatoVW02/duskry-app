@@ -9,6 +9,26 @@ vi.mock('../../stores/useSettingsStore', () => ({
 }));
 
 describe('Settings updater', () => {
+  it('groups settings by user goal and explains each destination', () => {
+    const markup = renderToStaticMarkup(
+      <UpdaterContext.Provider
+        value={{
+          status: { state: 'idle' },
+          checkForUpdates: async () => ({ kind: 'upToDate' }),
+          downloadAndInstall: async () => {},
+        }}
+      >
+        <Settings activeTab="about" />
+      </UpdaterContext.Provider>,
+    );
+
+    expect(markup).toContain('Everything is grouped by what you want to change.');
+    expect(markup).toContain('Backgrounds &amp; scenes');
+    expect(markup).toContain('Version &amp; release notes');
+    expect(markup).toContain('Updates &amp; about');
+    expect(markup).toContain('aria-current="page"');
+  });
+
   it('renders the install action with an ampersand instead of an escaped entity', () => {
     const status = {
       state: 'available',

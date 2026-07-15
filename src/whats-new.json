@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.1.4",
+      "title": "Projects Within Reach",
+      "summary": "Duskry now keeps projects close while you review activity, makes settings easier to navigate, and keeps every title readable across changing backgrounds.",
+      "items": [
+        {
+          "icon": "FolderOpen",
+          "text": "Projects are always available in the sidebar, so you can see your workspace without leaving the page."
+        },
+        {
+          "icon": "MousePointerClick",
+          "text": "Drag activity directly from Review onto a sidebar project to organize it in one motion."
+        },
+        {
+          "icon": "SlidersHorizontal",
+          "text": "Settings are grouped by purpose with clearer descriptions, navigation, and active-page context."
+        },
+        {
+          "icon": "Eye",
+          "text": "Page titles stay readable over translucent scenes, and the conflicting native macOS title has been removed."
+        }
+      ]
+    },
+    {
       "version": "1.1.3",
       "title": "A Clearer Way to Review",
       "summary": "Reviewing a busy day is now faster, easier to understand, and less disruptive while new activity arrives.",

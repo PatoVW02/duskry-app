@@ -4,21 +4,77 @@ import { Tracking } from './Tracking';
 import { Billing } from './Billing';
 import { Permissions } from './Permissions';
 import { TrackerLog } from './TrackerLog';
-import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle, ScrollText, Sparkles } from 'lucide-react';
+import { Palette, Info, SlidersHorizontal, CreditCard, ShieldCheck, RefreshCw, Download, CheckCircle, AlertCircle, ScrollText, Sparkles, type LucideIcon } from 'lucide-react';
 import { useUpdaterContext } from '../../contexts/UpdaterContext';
 import { billingPlansEnabled } from '../../lib/featureFlags';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { getAppVersion } from '../../lib/appVersion';
+import './Settings.css';
 
 export type SettingsTab = 'appearance' | 'tracking' | 'permissions' | 'billing' | 'log' | 'about';
 
-const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'appearance',  label: 'Appearance',  icon: <Palette size={13} /> },
-  { id: 'tracking',    label: 'Tracking',    icon: <SlidersHorizontal size={13} /> },
-  { id: 'permissions', label: 'Permissions', icon: <ShieldCheck size={13} /> },
-  { id: 'billing',     label: 'Billing',     icon: <CreditCard size={13} /> },
-  { id: 'log',         label: 'Tracker Log', icon: <ScrollText size={13} /> },
-  { id: 'about',       label: 'About',       icon: <Info size={13} /> },
+type SettingsGroup = 'Experience' | 'Tracking' | 'Account & help';
+
+interface SettingsTabDefinition {
+  id: SettingsTab;
+  label: string;
+  shortDescription: string;
+  summary: string;
+  group: SettingsGroup;
+  icon: LucideIcon;
+}
+
+const GROUPS: SettingsGroup[] = ['Experience', 'Tracking', 'Account & help'];
+
+const TABS: SettingsTabDefinition[] = [
+  {
+    id: 'appearance',
+    label: 'Appearance',
+    shortDescription: 'Backgrounds & scenes',
+    summary: 'Choose how Duskry looks and when each background scene appears.',
+    group: 'Experience',
+    icon: Palette,
+  },
+  {
+    id: 'tracking',
+    label: 'Tracking behavior',
+    shortDescription: 'Idle time & automation',
+    summary: 'Control how time is captured and how project rules behave while you work.',
+    group: 'Tracking',
+    icon: SlidersHorizontal,
+  },
+  {
+    id: 'permissions',
+    label: 'Permissions',
+    shortDescription: 'Required system access',
+    summary: 'See exactly which system permissions Duskry needs and fix missing access.',
+    group: 'Tracking',
+    icon: ShieldCheck,
+  },
+  {
+    id: 'billing',
+    label: 'Plan & billing',
+    shortDescription: 'Subscription & license',
+    summary: 'Review your plan, verify access, and manage billing or this device license.',
+    group: 'Account & help',
+    icon: CreditCard,
+  },
+  {
+    id: 'log',
+    label: 'Diagnostics',
+    shortDescription: 'Live tracker log',
+    summary: 'Inspect recent tracker events when you need to understand or troubleshoot activity capture.',
+    group: 'Account & help',
+    icon: ScrollText,
+  },
+  {
+    id: 'about',
+    label: 'Updates & about',
+    shortDescription: 'Version & release notes',
+    summary: 'Check for updates, revisit what changed, and confirm the installed Duskry version.',
+    group: 'Account & help',
+    icon: Info,
+  },
 ];
 
 export function Settings({
@@ -43,24 +99,63 @@ export function Settings({
     onTabChange?.(nextTab);
   };
 
-  return (
-    <div style={{ display: 'flex', gap: 16 }}>
-      <div style={{ width: 160, flexShrink: 0 }}>
-        <div className="glass-card" style={{ padding: '8px' }}>
-          {visibleTabs.map((t) => (
-            <button
-              key={t.id}
-              className={`nav-item ${tab === t.id ? 'active' : ''}`}
-              onClick={() => selectTab(t.id)}
-            >
-              {t.icon}
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
+  const activeDefinition = visibleTabs.find((item) => item.id === tab)
+    ?? visibleTabs[0];
+  const ActiveIcon = activeDefinition.icon;
 
-      <div style={{ flex: 1, minWidth: 0 }}>
+  return (
+    <section className="settings-shell">
+      <aside className="settings-navigation glass-card">
+        <div className="settings-navigation__intro">
+          <span>Preferences</span>
+          <h2>Make Duskry yours</h2>
+          <p>Everything is grouped by what you want to change.</p>
+        </div>
+
+        <nav className="settings-navigation__groups" aria-label="Settings categories">
+          {GROUPS.map((group) => {
+            const groupTabs = visibleTabs.filter((item) => item.group === group);
+            if (groupTabs.length === 0) return null;
+            const groupId = `settings-group-${group.toLowerCase().replace(/[^a-z]+/g, '-')}`;
+            return (
+              <div className="settings-navigation__group" key={group} role="group" aria-labelledby={groupId}>
+                <div className="settings-navigation__group-label" id={groupId}>{group}</div>
+                {groupTabs.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = tab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`settings-navigation__item${isActive ? ' settings-navigation__item--active' : ''}`}
+                      onClick={() => selectTab(item.id)}
+                      aria-current={isActive ? 'page' : undefined}
+                    >
+                      <span className="settings-navigation__icon"><Icon size={14} /></span>
+                      <span className="settings-navigation__copy">
+                        <strong>{item.label}</strong>
+                        <small>{item.shortDescription}</small>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <main className="settings-main" aria-labelledby="settings-content-title">
+        <header className="settings-content-header glass-card">
+          <div className="settings-content-header__icon"><ActiveIcon size={18} /></div>
+          <div>
+            <span>{activeDefinition.group}</span>
+            <h1 id="settings-content-title">{activeDefinition.label}</h1>
+            <p>{activeDefinition.summary}</p>
+          </div>
+        </header>
+
+        <div className="settings-content">
         {tab === 'appearance'  && <Appearance />}
         {tab === 'tracking'    && <Tracking onUpgrade={onUpgrade} />}
         {tab === 'permissions' && <Permissions />}
@@ -68,7 +163,8 @@ export function Settings({
         {tab === 'log'         && <TrackerLog />}
         {tab === 'about'       && <AboutTab />}
       </div>
-    </div>
+      </main>
+    </section>
   );
 }
 

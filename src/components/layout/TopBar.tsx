@@ -63,7 +63,7 @@ export function TopBar({
             {canStartFreeTrial ? 'Get free trial' : 'Upgrade'}
           </button>
         )}
-        <span data-tauri-drag-region style={{ fontSize: 14, fontWeight: 500 }}>{title}</span>
+        <span className="top-bar__title" data-tauri-drag-region>{title}</span>
 
         {dateNav ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
