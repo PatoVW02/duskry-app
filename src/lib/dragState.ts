@@ -14,13 +14,14 @@
 
 let _ids: number[] = [];
 let _hoverId: number | null = null;
+const selectionListenerOptions = { capture: true };
 
 function preventSelection(event: Event) { event.preventDefault(); }
 
 export const dragState = {
   prepare() {
     document.documentElement.dataset.activityDrag = 'pending';
-    document.addEventListener('selectstart', preventSelection, true);
+    document.addEventListener('selectstart', preventSelection, selectionListenerOptions);
   },
   start(ids: number[]) {
     this.prepare();
@@ -39,7 +40,7 @@ export const dragState = {
   getIds(): number[] { return _ids; },
   clear() {
     delete document.documentElement.dataset.activityDrag;
-    document.removeEventListener('selectstart', preventSelection, true);
+    document.removeEventListener('selectstart', preventSelection, selectionListenerOptions);
     _ids = [];
     _hoverId = null;
     window.dispatchEvent(new Event('duskry-drag-end'));

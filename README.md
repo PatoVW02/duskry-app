@@ -93,6 +93,7 @@ This runs [scripts/release-mac.sh](/Users/patricio/Development/Personal/Apps/Dus
   - `universal-apple-darwin`
 - Creates and pushes a Git tag like `v1.0.7`
 - Creates a GitHub release
+- Reuses an existing draft for that version, while refusing to replace a published release
 - Uploads:
   - `Duskry_arm64.dmg`
   - `Duskry_x64.dmg`
@@ -114,6 +115,8 @@ That workflow:
 - Merges Mac and Windows updater manifests into the final `latest.json`
 
 The merged `latest.json` is what powers the in-app auto-updater across platforms.
+
+Updater artifacts use the native Tauri 2 format: signed `.exe` or `.msi` installers on Windows and a signed `.app.tar.gz` bundle on macOS. Legacy Windows ZIP extraction is disabled. Existing Tauri 2 clients can install the native Windows artifacts.
 
 ### Tag-only release helper
 

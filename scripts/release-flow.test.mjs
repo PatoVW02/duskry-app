@@ -7,12 +7,19 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const macRelease = fs.readFileSync(path.join(root, 'scripts', 'release-mac.sh'), 'utf8');
 const windowsRelease = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
 const dependabot = fs.readFileSync(path.join(root, '.github', 'dependabot.yml'), 'utf8');
+const tauriConfig = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
 
 describe('atomic cross-platform release flow', () => {
+  it('ships signed native Tauri 2 installers instead of legacy Windows ZIP archives', () => {
+    expect(tauriConfig.bundle.createUpdaterArtifacts).toBe(true);
+    expect(windowsRelease).toContain('test("\\\\.(exe|msi)$")');
+  });
   it('stages macOS assets in a draft without uploading a partial latest manifest', () => {
     expect(macRelease).toContain('gh release create "${TAG}"');
     expect(macRelease).toContain('--draft');
     expect(macRelease).toContain('--verify-tag');
+    expect(macRelease).toContain('gh release edit "${TAG}"');
+    expect(macRelease).toContain('refusing to replace a published or ambiguous release');
     expect(macRelease).toContain('Refusing to publish a release that cannot update existing Mac users.');
     expect(macRelease).not.toContain('"${TMP}/latest.json"');
     expect(macRelease).not.toContain('release ${TAG} published');

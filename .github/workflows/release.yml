@@ -209,6 +209,7 @@ jobs:
           jq -e --arg version "${expected_version}" '
             .version == $version
             and (.platforms["windows-x86_64"].url | type == "string" and length > 0)
+            and (.platforms["windows-x86_64"].url | test("\\.(exe|msi)$"))
             and (.platforms["windows-x86_64"].signature | type == "string" and length > 0)
           ' win-latest.json >/dev/null
 

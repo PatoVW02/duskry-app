@@ -178,11 +178,23 @@ echo "▶ Tagging ${TAG} and staging a draft GitHub release"
 git tag "${TAG}"
 git push origin "${TAG}"
 
-gh release create "${TAG}" \
-  --draft \
-  --verify-tag \
-  --title "Duskry ${TAG}" \
-  --notes-file "${TMP}/release-notes.md"
+EXISTING_DRAFT=$(gh release list --limit 100 --json tagName,name,isDraft \
+  --jq ".[] | select(.tagName == \"${TAG}\" or .name == \"Duskry ${TAG}\") | .isDraft")
+if [ "$EXISTING_DRAFT" = "true" ]; then
+  gh release edit "${TAG}" \
+    --draft \
+    --title "Duskry ${TAG}" \
+    --notes-file "${TMP}/release-notes.md"
+elif [ -z "$EXISTING_DRAFT" ]; then
+  gh release create "${TAG}" \
+    --draft \
+    --verify-tag \
+    --title "Duskry ${TAG}" \
+    --notes-file "${TMP}/release-notes.md"
+else
+  echo "Error: refusing to replace a published or ambiguous release for ${TAG}."
+  exit 1
+fi
 
 echo "▶ Uploading Mac assets"
 gh release upload "${TAG}" "${TMP}/Duskry_arm64.dmg" --clobber
