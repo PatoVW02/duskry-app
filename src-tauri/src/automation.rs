@@ -19,7 +19,7 @@ pub fn predict(window: &ActiveWindow, events: &[db::LearningEvent]) -> Option<Pr
             .is_some_and(|path| document_path(event.file_path.as_deref()) == Some(path))
         {
             4
-        } else if !window.window_title.trim().is_empty()
+        } else if has_specific_title(&window.app_name, &window.window_title)
             && event.window_title.as_deref().is_some_and(|title| {
                 title
                     .trim()
@@ -31,6 +31,7 @@ pub fn predict(window: &ActiveWindow, events: &[db::LearningEvent]) -> Option<Pr
             .url
             .as_deref()
             .and_then(rules::normalized_host)
+            .filter(|host| !is_shared_host(host))
             .is_some_and(|host| {
                 event.domain.as_deref().and_then(rules::normalized_host) == Some(host)
             })
@@ -68,9 +69,83 @@ pub fn canonical_app_name(raw: &str) -> String {
         "firefox" => "Firefox",
         "safari" => "Safari",
         "duskry" => "Duskry",
+        "chatgpt" => "ChatGPT",
+        "claude" => "Claude",
+        "gemini" => "Gemini",
+        "copilot" => "Copilot",
         _ => return trimmed.to_lowercase(),
     }
     .to_lowercase()
+}
+
+/// App names and placeholders cannot distinguish documents or conversations.
+pub fn has_specific_title(app_name: &str, title: &str) -> bool {
+    let normalize = |value: &str| -> String {
+        value
+            .trim()
+            .to_lowercase()
+            .trim_end_matches(".exe")
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect()
+    };
+    title
+        .replace(" — ", "\u{1f}")
+        .replace(" – ", "\u{1f}")
+        .replace(" - ", "\u{1f}")
+        .replace(" | ", "\u{1f}")
+        .split('\u{1f}')
+        .any(|part| {
+            let title = normalize(part);
+            !title.is_empty()
+                && title != normalize(app_name)
+                && !matches!(
+                    title.as_str(),
+                    "untitled"
+                        | "untitledwindow"
+                        | "newtab"
+                        | "newchat"
+                        | "newconversation"
+                        | "home"
+                        | "chatgpt"
+                        | "claude"
+                        | "gemini"
+                        | "copilot"
+                )
+        })
+}
+
+pub fn is_shared_host(host: &str) -> bool {
+    [
+        "chatgpt.com",
+        "chat.openai.com",
+        "claude.ai",
+        "gemini.google.com",
+        "copilot.microsoft.com",
+    ]
+    .iter()
+    .any(|shared| host == *shared || host.ends_with(&format!(".{shared}")))
+}
+
+/// Broad assignment of multipurpose tools must be an explicit user rule.
+pub fn is_shared_app(app_name: &str) -> bool {
+    matches!(
+        canonical_app_name(app_name).as_str(),
+        "google chrome"
+            | "chromium"
+            | "microsoft edge"
+            | "brave browser"
+            | "safari"
+            | "firefox"
+            | "arc"
+            | "orion"
+            | "atlas"
+            | "atlas browser"
+            | "chatgpt"
+            | "claude"
+            | "gemini"
+            | "copilot"
+    )
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
@@ -83,6 +158,10 @@ pub fn display_app_name(raw: &str) -> String {
         "firefox" => "Firefox".into(),
         "safari" => "Safari".into(),
         "duskry" => "Duskry".into(),
+        "chatgpt" => "ChatGPT".into(),
+        "claude" => "Claude".into(),
+        "gemini" => "Gemini".into(),
+        "copilot" => "Copilot".into(),
         _ => raw.trim().to_string(),
     }
 }
@@ -91,10 +170,13 @@ pub fn display_app_name(raw: &str) -> String {
 pub fn correction_pattern(window: &ActiveWindow) -> Option<String> {
     let (field, operator, value) = if let Some(path) = document_path(window.file_path.as_deref()) {
         ("path", "equals", path.to_string())
-    } else if !window.window_title.trim().is_empty() {
+    } else if has_specific_title(&window.app_name, &window.window_title) {
         ("title", "equals", window.window_title.trim().to_string())
     } else {
         let host = window.url.as_deref().and_then(rules::normalized_host)?;
+        if is_shared_host(&host) {
+            return None;
+        }
         ("url", "host_equals", host)
     };
     Some(
@@ -106,7 +188,7 @@ pub fn correction_pattern(window: &ActiveWindow) -> Option<String> {
     )
 }
 
-fn document_path(value: Option<&str>) -> Option<&str> {
+pub fn document_path(value: Option<&str>) -> Option<&str> {
     value
         .map(str::trim)
         .filter(|path| !path.is_empty())
@@ -164,11 +246,53 @@ mod tests {
         assert!(correction_pattern(&w).is_none());
     }
     #[test]
+    fn generic_titles_are_not_specific_prediction_or_remembering_evidence() {
+        for (app, title) in [
+            ("ChatGPT", "ChatGPT"),
+            ("Google Chrome", "ChatGPT — Google Chrome"),
+            ("Claude", "New chat | Claude"),
+            ("Editor", "Untitled window"),
+            ("Editor", ""),
+        ] {
+            let w = ActiveWindow {
+                app_name: app.into(),
+                window_title: title.into(),
+                url: Some("chatgpt.com".into()),
+                file_path: None,
+                timestamp: 1,
+            };
+            let e = db::LearningEvent {
+                app_name: app.into(),
+                window_title: Some(title.into()),
+                domain: Some("chatgpt.com".into()),
+                ..event(1, title)
+            };
+            assert!(!has_specific_title(app, title));
+            assert!(correction_pattern(&w).is_none());
+            assert!(predict(&w, &[e.clone(), e]).is_none());
+        }
+    }
+    #[test]
+    fn missing_title_can_use_an_observed_document_or_specific_website() {
+        let mut w = window();
+        w.window_title.clear();
+        w.file_path = Some("/work/Duskry/proposal.pdf".into());
+        assert!(correction_pattern(&w).unwrap().contains("path"));
+        w.file_path = None;
+        w.url = Some("client.example.com".into());
+        assert!(correction_pattern(&w).unwrap().contains("host_equals"));
+        w.url = Some("chatgpt.com".into());
+        w.window_title = "Client planning — ChatGPT".into();
+        assert!(correction_pattern(&w).unwrap().contains("Client planning"));
+    }
+    #[test]
     fn known_process_aliases_match_without_renaming_unknown_apps() {
         assert_eq!(
             canonical_app_name(" chrome.exe "),
             canonical_app_name("Google Chrome")
         );
         assert_eq!(display_app_name("Acme Editor Beta"), "Acme Editor Beta");
+        assert_eq!(display_app_name("ChatGPT.exe"), "ChatGPT");
+        assert!(is_shared_app("ChatGPT.exe"));
     }
 }

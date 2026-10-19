@@ -1,6 +1,33 @@
 {
   "versions": [
     {
+      "version": "1.1.6",
+      "title": "Every Activity Within Reach",
+      "summary": "Review activity without banners covering your work, move individual records more easily, and organize visits that have missing or generic window titles.",
+      "items": [
+        {
+          "icon": "CheckSquare",
+          "text": "Selection controls and confirmation banners stay below the activity list, keeping the bottom records visible and selectable in smaller windows."
+        },
+        {
+          "icon": "MousePointerClick",
+          "text": "Drag title groups and individual nested records by their text to assign them to a sidebar project. Clicking, keyboard editing, and drag cancellation still work."
+        },
+        {
+          "icon": "Clock3",
+          "text": "Visits with missing or generic titles such as ChatGPT stay separate and show their times. Add a note or choose a project for each visit."
+        },
+        {
+          "icon": "Eye",
+          "text": "Available document names help identify untitled visits, and clearer guidance explains when to use a Focus project."
+        },
+        {
+          "icon": "SlidersHorizontal",
+          "text": "Generic titles no longer count as specific learning evidence. Remembering an assignment requires useful window, document, or website context, while explicit rules remain under your control."
+        }
+      ]
+    },
+    {
       "version": "1.1.5",
       "title": "Tracking That Learns From You",
       "summary": "Duskry can handle more of your day in the background, with clearer controls and a simple way to review and correct project assignments.",

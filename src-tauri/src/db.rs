@@ -573,6 +573,7 @@ pub struct TrackingNotice {
     pub confidence: Option<f64>,
     pub reason: String,
     pub created_at: i64,
+    pub can_remember: bool,
 }
 
 pub fn save_tracking_notice(
@@ -589,17 +590,35 @@ pub fn save_tracking_notice(
 
 pub fn get_tracking_notices(activity_id: Option<i64>) -> Result<Vec<TrackingNotice>> {
     let conn = DB.lock().expect("db lock");
-    let mut statement = conn.prepare("SELECT n.activity_id, a.app_name, a.window_title, ass.project_id, n.suggested_project_id, n.confidence, n.reason, n.created_at FROM tracking_notices n JOIN activities a ON a.id = n.activity_id LEFT JOIN assignments ass ON ass.activity_id = a.id WHERE n.resolved = 0 ORDER BY (n.activity_id = ?1) DESC, n.created_at DESC, n.activity_id DESC LIMIT 50")?;
+    get_tracking_notices_conn(&conn, activity_id)
+}
+
+fn get_tracking_notices_conn(
+    conn: &Connection,
+    activity_id: Option<i64>,
+) -> Result<Vec<TrackingNotice>> {
+    let mut statement = conn.prepare("SELECT n.activity_id, a.app_name, a.window_title, ass.project_id, n.suggested_project_id, n.confidence, n.reason, n.created_at, a.domain, a.file_path FROM tracking_notices n JOIN activities a ON a.id = n.activity_id LEFT JOIN assignments ass ON ass.activity_id = a.id WHERE n.resolved = 0 ORDER BY (n.activity_id = ?1) DESC, n.created_at DESC, n.activity_id DESC LIMIT 50")?;
     let rows = statement.query_map(params![activity_id.unwrap_or(0)], |row| {
+        let app_name: String = row.get(1)?;
+        let window_title: Option<String> = row.get(2)?;
+        let can_remember = crate::automation::correction_pattern(&crate::tracker::ActiveWindow {
+            app_name: app_name.clone(),
+            window_title: window_title.clone().unwrap_or_default(),
+            url: row.get(8)?,
+            file_path: row.get(9)?,
+            timestamp: 0,
+        })
+        .is_some();
         Ok(TrackingNotice {
             activity_id: row.get(0)?,
-            app_name: row.get(1)?,
-            window_title: row.get(2)?,
+            app_name,
+            window_title,
             project_id: row.get(3)?,
             suggested_project_id: row.get(4)?,
             confidence: row.get(5)?,
             reason: row.get(6)?,
             created_at: row.get(7)?,
+            can_remember,
         })
     })?;
     rows.collect()
@@ -1147,7 +1166,10 @@ fn build_confident_candidates(
         .domain
         .as_deref()
         .and_then(crate::rules::normalized_host);
-    if let Some(host) = hostname.as_deref() {
+    if let Some(host) = hostname
+        .as_deref()
+        .filter(|host| !crate::automation::is_shared_host(host))
+    {
         raw_candidates.push((
             "compound".to_string(),
             "matches".to_string(),
@@ -1205,6 +1227,7 @@ fn build_confident_candidates(
         .as_deref()
         .map(str::trim)
         .filter(|title| title.chars().count() >= 3)
+        .filter(|title| crate::automation::has_specific_title(app_name, title))
     {
         raw_candidates.push((
             "compound".to_string(),
@@ -1218,13 +1241,20 @@ fn build_confident_candidates(
         ));
     }
 
-    raw_candidates.push((
-        "app".to_string(),
-        "equals".to_string(),
-        app_name.to_string(),
-        format!("the app is {}", app_name),
-        5,
-    ));
+    if !raw_candidates.is_empty()
+        && !crate::automation::is_shared_app(app_name)
+        && !hostname
+            .as_deref()
+            .is_some_and(crate::automation::is_shared_host)
+    {
+        raw_candidates.push((
+            "app".to_string(),
+            "equals".to_string(),
+            app_name.to_string(),
+            format!("the app is {}", app_name),
+            5,
+        ));
+    }
 
     let events = get_learning_events_conn(conn)?;
     let existing_rules = get_all_rules_conn(conn)?;
@@ -2273,6 +2303,72 @@ mod tests {
         assert_eq!(automation_requirements("compound", true), (5, 0.90, 2));
         assert_eq!(automation_requirements("app", false), (6, 0.90, 1));
         assert_eq!(automation_requirements("app", true), (8, 0.95, 2));
+    }
+
+    #[test]
+    fn repeated_generic_chat_visits_never_promote_a_broad_rule() {
+        let (conn, mut activity) = review_fixture();
+        activity.app_name = "ChatGPT".into();
+        activity.window_title = Some("ChatGPT".into());
+        activity.domain = Some("chatgpt.com".into());
+        for id in 10..20 {
+            let start = 1_800_000_000 + id * 86_400;
+            conn.execute("INSERT INTO activities (id, app_name, window_title, domain, started_at, ended_at, duration_s) VALUES (?1, 'ChatGPT', 'ChatGPT', 'chatgpt.com', ?2, ?2 + 60, 60)", params![id, start]).unwrap();
+            conn.execute("INSERT INTO rule_learning_events (activity_id, project_id, app_name, window_title, domain, started_at, updated_at) VALUES (?1, 2, 'ChatGPT', 'ChatGPT', 'chatgpt.com', ?2, ?2)", params![id, start]).unwrap();
+        }
+        for automatic in [true, false] {
+            assert!(build_confident_candidates(&conn, &activity, 2, automatic)
+                .unwrap()
+                .is_empty());
+        }
+        conn.execute(
+            "UPDATE activities SET window_title = 'Duskry planning' WHERE id >= 10",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE rule_learning_events SET window_title = 'Duskry planning' WHERE activity_id >= 10", []).unwrap();
+        activity.window_title = Some("Duskry planning".into());
+        let candidates = build_confident_candidates(&conn, &activity, 2, true).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].value.contains("Duskry planning"));
+    }
+
+    #[test]
+    fn inbox_remembering_uses_specific_observed_context_and_allows_a_one_off_assignment() {
+        let (mut conn, mut activity) = review_fixture();
+        conn.execute("UPDATE activities SET app_name = 'ChatGPT', window_title = 'ChatGPT', domain = 'chatgpt.com' WHERE id = 1", []).unwrap();
+        assert!(!get_tracking_notices_conn(&conn, None).unwrap()[0].can_remember);
+        conn.execute(
+            "UPDATE activities SET file_path = '/work/Duskry/brief.pdf' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        assert!(get_tracking_notices_conn(&conn, None).unwrap()[0].can_remember);
+        conn.execute(
+            "UPDATE activities SET file_path = NULL, window_title = '' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        assert!(!get_tracking_notices_conn(&conn, None).unwrap()[0].can_remember);
+        activity.app_name = "ChatGPT".into();
+        activity.window_title = None;
+        activity.domain = Some("chatgpt.com".into());
+        confirm_tracking_assignment_conn(&mut conn, &activity, 2, None, 1).unwrap();
+        assert!(get_tracking_notices_conn(&conn, None).unwrap().is_empty());
+        assert_eq!(
+            conn.query_row(
+                "SELECT project_id FROM assignments WHERE activity_id = 1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM rules", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

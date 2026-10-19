@@ -200,6 +200,41 @@ fn condition_specificity(field: &str, operator: &str) -> i32 {
 }
 
 fn rule_matches(rule: &Rule, window: &ActiveWindow) -> bool {
+    if rule.source == "learned" {
+        let mut observed = window.clone();
+        if !crate::automation::has_specific_title(&observed.app_name, &observed.window_title) {
+            observed.window_title.clear();
+        }
+        let observed_host = observed.url.as_deref().and_then(normalized_host);
+        let shared_host = observed_host
+            .as_deref()
+            .is_some_and(crate::automation::is_shared_host);
+        observed.url = observed_host.filter(|host| !crate::automation::is_shared_host(host));
+        observed.file_path =
+            crate::automation::document_path(observed.file_path.as_deref()).map(str::to_string);
+        if observed.window_title.is_empty()
+            && observed.url.is_none()
+            && observed.file_path.is_none()
+        {
+            return false;
+        }
+        if !raw_rule_matches(rule, &observed) {
+            return false;
+        }
+        if crate::automation::is_shared_app(&window.app_name) || shared_host {
+            // Also guard existing learned app-wide rules and OR branches:
+            // a match must depend on specific observed context.
+            observed.window_title.clear();
+            observed.url = None;
+            observed.file_path = None;
+            return !raw_rule_matches(rule, &observed);
+        }
+        return true;
+    }
+    raw_rule_matches(rule, window)
+}
+
+fn raw_rule_matches(rule: &Rule, window: &ActiveWindow) -> bool {
     if rule.field == "compound" {
         return compound_rule_matches(rule, window);
     }
@@ -587,6 +622,64 @@ mod tests {
             support_count: 0,
             created_at: None,
         }
+    }
+
+    #[test]
+    fn learned_rules_cannot_reuse_generic_titles_shared_hosts_or_app_wide_shortcuts() {
+        let mut w = window();
+        w.app_name = "ChatGPT".into();
+        w.window_title = "ChatGPT".into();
+        w.url = Some("chatgpt.com".into());
+        w.file_path = None;
+        for (field, operator, value) in [
+            ("title", "equals", "ChatGPT"),
+            ("url", "host_equals", "chatgpt.com"),
+            ("app", "equals", "ChatGPT"),
+        ] {
+            let mut r = rule(field, operator, value);
+            assert!(
+                apply_rules(&w, &[r.clone()]).is_some(),
+                "explicit user rule remains valid"
+            );
+            r.source = "learned".into();
+            assert!(apply_rules(&w, &[r.clone()]).is_none());
+            assert!(!has_matching_rules(&w, &[r]));
+        }
+
+        w.window_title = "Duskry release checklist".into();
+        let pattern = crate::automation::correction_pattern(&w).unwrap();
+        let mut r = rule("compound", "matches", &pattern);
+        r.source = "learned".into();
+        assert!(apply_rules(&w, &[r.clone()]).is_some());
+        r.value = r.value.replace("\"and\"", "\"or\"");
+        assert!(
+            apply_rules(&w, &[r]).is_none(),
+            "an app-only OR branch still broadens the rule"
+        );
+
+        w.window_title.clear();
+        w.file_path = Some("/work/Duskry/plan.pdf".into());
+        let mut r = rule(
+            "compound",
+            "matches",
+            &crate::automation::correction_pattern(&w).unwrap(),
+        );
+        r.source = "learned".into();
+        assert!(
+            apply_rules(&w, &[r]).is_some(),
+            "an observed file remains usable without a title"
+        );
+
+        w.app_name = "Editor".into();
+        w.window_title = "Editor".into();
+        w.file_path = None;
+        w.url = None;
+        let mut r = rule("app", "equals", "Editor");
+        r.source = "learned".into();
+        assert!(
+            apply_rules(&w, &[r]).is_none(),
+            "missing context needs review even for an unknown app"
+        );
     }
 
     #[test]

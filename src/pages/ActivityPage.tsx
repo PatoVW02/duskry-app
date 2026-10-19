@@ -7,6 +7,7 @@ import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { errorMessage, formatDuration } from '../lib/utils';
 import { dragState } from '../lib/dragState';
+import { activityContextLabel, activityTitleGroupKey, hasSpecificWindowTitle } from '../lib/activityContext';
 import { normalizeTimelineActivities } from '../lib/activityPresentation';
 import { groupActivitiesIntoBursts } from '../lib/activityBursts';
 import { lockedFreeProjectIds } from '../lib/projectAccess';
@@ -21,6 +22,7 @@ import './Review.css';
 // ── Tree types ─────────────────────────────────────────────────────────────
 
 interface TitleGroup {
+  key: string;
   title: string;
   activityIds: number[];
   total_s: number;
@@ -68,7 +70,7 @@ function displayAppName(name: string): string {
 }
 
 function fullActivityLabel(activity: Activity): string {
-  return activity.window_title?.trim() || 'Untitled';
+  return activityContextLabel(activity);
 }
 
 function buildTree(activities: Activity[], includeBriefActivity = false): AppGroup[] {
@@ -94,15 +96,16 @@ function buildTree(activities: Activity[], includeBriefActivity = false): AppGro
         .map(([ctx, cActs]) => {
           const byTitle = new Map<string, Activity[]>();
           for (const a of cActs) {
-            const t = a.window_title?.trim() || '';
+            const t = activityTitleGroupKey(a);
             const list = byTitle.get(t) ?? [];
             list.push(a);
             byTitle.set(t, list);
           }
 
           const titles: TitleGroup[] = Array.from(byTitle.entries())
-            .map(([title, tActs]) => ({
-              title,
+            .map(([key, tActs]) => ({
+              key,
+              title: tActs[0].window_title?.trim() || '',
               activityIds: tActs.map((a) => a.id),
               total_s: tActs.reduce((s, a) => s + (a.duration_s ?? 0), 0),
             }))
@@ -528,7 +531,7 @@ function TitleGroupRow({
       )}
       <button
         type="button"
-        data-no-drag="true"
+        data-activity-drag-label="true"
         className="review-row-label-button"
         onClick={(event) => { event.stopPropagation(); rowAction?.(); }}
         style={{
@@ -620,7 +623,7 @@ function ActivityLeafRow({
       <SelectionToggle state={selectionState} label={fullActivityLabel(activity)} onToggle={onToggleSelect} />
       <button
         type="button"
-        data-no-drag="true"
+        data-activity-drag-label="true"
         className="review-row-label-button"
         onClick={(event) => { event.stopPropagation(); onEdit(); }}
         style={{
@@ -1198,10 +1201,12 @@ export function ActivityPage({
   const dragPending = useRef<{ ids: number[]; startX: number; startY: number; pointerId: number } | null>(null);
   const dragActiveIds = useRef<number[] | null>(null);
   const dragCapture = useRef<{ element: HTMLElement; pointerId: number } | null>(null);
+  const suppressPointerClick = useRef(false);
   const DRAG_THRESHOLD = 5;
 
   const resetDrag = useCallback(() => {
     const capture = dragCapture.current;
+    if (capture) suppressPointerClick.current = true;
     dragCapture.current = null;
     dragPending.current = null;
     dragActiveIds.current = null;
@@ -1244,8 +1249,11 @@ export function ActivityPage({
     draggable: false,
     onDragStart: (event: React.DragEvent) => event.preventDefault(),
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+      suppressPointerClick.current = false;
       if (e.button !== 0 || !e.isPrimary) return;
-      if ((e.target as Element).closest('[data-no-drag="true"], button, input, select, textarea, label, a')) return;
+      const target = e.target as Element;
+      if (target.closest('[data-no-drag="true"], input, select, textarea, label, a')) return;
+      if (target.closest('button') && !target.closest('[data-activity-drag-label]')) return;
       e.preventDefault();
       dragPending.current = { ids: resolveDragIds(ids), startX: e.clientX, startY: e.clientY, pointerId: e.pointerId };
       dragActiveIds.current = null;
@@ -1275,9 +1283,19 @@ export function ActivityPage({
       const wasPress = dragPending.current?.pointerId === e.pointerId;
       const ids = dragActiveIds.current ? [...dragActiveIds.current] : null;
       const projectId = ids ? projectAtPoint(e.clientX, e.clientY) : null;
+      // Pointer capture retargets the click to this row. Handle a press once
+      // here; leave synthesized keyboard clicks on the label button intact.
+      suppressPointerClick.current = true;
       resetDrag();
       if (wasPress) options?.onPress?.();
       else if (projectId && ids) void handleDropRef.current(projectId, ids);
+    },
+    onClickCapture: (event: React.MouseEvent<HTMLElement>) => {
+      if (suppressPointerClick.current && event.detail > 0) {
+        event.preventDefault();
+        event.stopPropagation();
+        suppressPointerClick.current = false;
+      }
     },
     onPointerCancel: resetDrag,
     onLostPointerCapture: (e: React.PointerEvent<HTMLElement>) => {
@@ -1416,6 +1434,12 @@ export function ActivityPage({
           )}
 
           <div className="review-activity-scroll">
+            {filteredActivities.some((activity) => !hasSpecificWindowTitle(activity.app_name, activity.window_title)) && (
+              <details className="review-context-help">
+                <summary>Some visits have missing or generic window titles</summary>
+                <p>Each recorded visit stays separate and shows its time. Click a title to add a note or assign its project. Duskry can only distinguish conversations when the app shares a specific title or document. Use a Focus project while working when it does not.</p>
+              </details>
+            )}
             {loading && !hasCurrentDateData ? (
               <div className="review-state" role="status" aria-live="polite">
                 <RefreshCw size={22} className="review-spin" />
@@ -1628,7 +1652,7 @@ export function ActivityPage({
                         </div>
                       )}
                       {(!showCtxRow || ctxOpen) && ctx.titles.map((tg) => {
-                        const titleKey = `${app.appName}::${ctx.context}::${tg.title || '__untitled__'}`;
+                        const titleKey = JSON.stringify([app.appName, ctx.context, tg.key]);
                         const titleOpen = expandedTitles.has(titleKey);
                         const titleAssignment = summarizeIndexedAssignment(tg.activityIds, projectIdByActivityId);
                         const tpro = titleAssignment.status === 'assigned'
@@ -1805,124 +1829,103 @@ export function ActivityPage({
         />
       )}
 
-      {/* Success toast */}
-      {toast && createPortal(
-        <div role={toast.kind === 'error' ? 'alert' : 'status'} aria-live="polite" style={{
-          position: 'fixed', bottom: selectedActivityIds.size > 0 ? 104 : 24, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 4000, pointerEvents: 'none',
-          display: 'flex', alignItems: 'center', gap: 9,
-          background: 'rgba(10,26,20,0.97)',
-          border: `1px solid ${toast.color}55`,
-          borderLeft: `3px solid ${toast.color}`,
-          borderRadius: 10,
-          padding: '9px 18px 9px 14px',
-          backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
-          minWidth: 220,
-        }}>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="7" r="7" fill={toast.color} opacity="0.25" />
-            <path
-              d={toast.kind === 'success' ? 'M4 7l2 2 4-4' : 'M4.5 4.5l5 5m0-5l-5 5'}
-              stroke={toast.color}
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.88)', fontWeight: 500 }}>
-            {toast.msg}
-          </span>
-        </div>,
-        document.body
-      )}
+      {(toast || selectedActivityIds.size > 0) && (
+        <div className="review-feedback">
+          {toast && (
+            <div className="review-toast" role={toast.kind === 'error' ? 'alert' : 'status'} aria-live="polite" style={{
+              flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 9,
+              background: 'rgba(10,26,20,0.97)',
+              border: `1px solid ${toast.color}55`,
+              borderLeft: `3px solid ${toast.color}`,
+              borderRadius: 10,
+              padding: '9px 18px 9px 14px',
+              backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+              minWidth: 220,
+            }}>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <circle cx="7" cy="7" r="7" fill={toast.color} opacity="0.25" />
+                <path
+                  d={toast.kind === 'success' ? 'M4 7l2 2 4-4' : 'M4.5 4.5l5 5m0-5l-5 5'}
+                  stroke={toast.color}
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.88)', fontWeight: 500 }}>
+                {toast.msg}
+              </span>
+            </div>
+          )}
 
-      {selectedActivityIds.size > 0 && createPortal(
-        <div style={{
-          position: 'fixed',
-          left: '50%',
-          bottom: 24,
-          transform: 'translateX(-50%)',
-          zIndex: 4200,
-          width: 'min(680px, calc(100vw - 32px))',
-          pointerEvents: 'none',
-        }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap',
-            padding: '10px 12px',
-            borderRadius: 12,
-            background: 'rgba(8,22,17,0.96)',
-            border: '0.5px solid rgba(45,212,191,0.24)',
-            boxShadow: '0 18px 40px rgba(0,0,0,0.42)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            pointerEvents: 'auto',
-          }}>
-            <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.55)', flex: '1 1 140px' }}>
-              {selectedActivityIds.size} {selectedActivityIds.size === 1 ? 'activity selected' : 'activities selected'}
-            </span>
-            <Select
-              value={bulkAssignProjectId}
-              onChange={setBulkAssignProjectId}
-              options={[
-                { value: '', label: 'Assign to…' },
-                ...projects.map((p) => ({
-                  value: String(p.id),
-                  label: lockedProjectIds.has(p.id) ? `${p.name} (locked on Free)` : p.name,
-                  disabled: lockedProjectIds.has(p.id),
-                })),
-              ]}
-              placeholder="Assign to…"
-              style={{ minWidth: 160, fontSize: 11.5 }}
-            />
-            <button
-              className="btn-primary"
-              onClick={() => void handleBulkAssignSelected()}
-              disabled={!bulkAssignProjectId}
-              style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
-            >
-              Assign
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={() => void handleBulkClearProject()}
-              style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
-            >
-              No project
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => void handleBulkDelete()}
-              disabled={bulkDeleting}
-              style={{
-                width: 'auto',
-                fontSize: 11.5,
-                padding: '6px 12px',
-                color: 'rgba(248,113,113,0.92)',
-                borderColor: bulkDeleteConfirm ? 'rgba(239,68,68,0.55)' : 'rgba(239,68,68,0.26)',
-                background: bulkDeleteConfirm ? 'rgba(239,68,68,0.18)' : 'rgba(239,68,68,0.08)',
-              }}
-            >
-              {bulkDeleting
-                ? 'Deleting…'
-                : bulkDeleteConfirm
-                  ? `Confirm delete ${selectedActivityIds.size}`
-                  : 'Delete'}
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={clearSelectedActivities}
-              style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
-            >
-              Clear
-            </button>
-          </div>
-        </div>,
-        document.body
+          {selectedActivityIds.size > 0 && (
+            <div className="review-selection-bar" role="region" aria-label="Selected activity actions">
+              <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.55)', flex: '1 1 140px' }}>
+                {selectedActivityIds.size} {selectedActivityIds.size === 1 ? 'activity selected' : 'activities selected'}
+              </span>
+              <Select
+                aria-label="Assign selected activities to project"
+                value={bulkAssignProjectId}
+                onChange={setBulkAssignProjectId}
+                options={[
+                  { value: '', label: 'Assign to…' },
+                  ...projects.map((p) => ({
+                    value: String(p.id),
+                    label: lockedProjectIds.has(p.id) ? `${p.name} (locked on Free)` : p.name,
+                    disabled: lockedProjectIds.has(p.id),
+                  })),
+                ]}
+                placeholder="Assign to…"
+                style={{ minWidth: 160, fontSize: 11.5 }}
+              />
+              <button
+                className="btn-primary"
+                onClick={() => void handleBulkAssignSelected()}
+                disabled={!bulkAssignProjectId}
+                style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
+              >
+                Assign
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => void handleBulkClearProject()}
+                style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
+              >
+                No project
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void handleBulkDelete()}
+                disabled={bulkDeleting}
+                style={{
+                  width: 'auto',
+                  fontSize: 11.5,
+                  padding: '6px 12px',
+                  color: 'rgba(248,113,113,0.92)',
+                  borderColor: bulkDeleteConfirm ? 'rgba(239,68,68,0.55)' : 'rgba(239,68,68,0.26)',
+                  background: bulkDeleteConfirm ? 'rgba(239,68,68,0.18)' : 'rgba(239,68,68,0.08)',
+                }}
+              >
+                {bulkDeleting
+                  ? 'Deleting…'
+                  : bulkDeleteConfirm
+                    ? `Confirm delete ${selectedActivityIds.size}`
+                    : 'Delete'}
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={clearSelectedActivities}
+                style={{ width: 'auto', fontSize: 11.5, padding: '6px 12px' }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
+        </div>
       )}
 
       {/* Drag ghost pill — follows cursor while pointer-dragging */}
@@ -1963,6 +1966,9 @@ export function ActivityPage({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <FieldLabel htmlFor="review-edit-window-title">Window title or note</FieldLabel>
             <input id="review-edit-window-title" className="glass-input" value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="Optional context shown in Review" style={{ fontSize: 12 }} />
+            {!hasSpecificWindowTitle(editingTarget.base.app_name, editingTarget.base.window_title) && (
+              <p className="review-context-note">This app shared a missing or generic title. Add a note to identify this visit, or choose its project below. For future work without a useful title, set a Focus project before starting.</p>
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <FieldLabel htmlFor="review-edit-project">Project</FieldLabel>

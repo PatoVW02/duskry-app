@@ -7,6 +7,7 @@ import { useTrackingNoticeStore, type TrackingNotice } from '../../stores/useTra
 import { useProjectStore } from '../../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../../stores/useLicenseStore';
 import { lockedFreeProjectIds } from '../../lib/projectAccess';
+import { hasSpecificWindowTitle } from '../../lib/activityContext';
 import { Field } from '../ui/Field';
 import { Select } from '../ui/Select';
 import { Switch } from '../ui/Switch';
@@ -90,7 +91,8 @@ function AssignmentReview({ notice }: { notice: TrackingNotice }) {
   const locked = isPro(tier) ? new Set<number>() : lockedFreeProjectIds(projects);
   const eligible = projects.filter((p) => !locked.has(p.id));
   const [projectId, setProjectId] = useState(notice.project_id ?? notice.suggested_project_id ?? 0);
-  const [remember, setRemember] = useState(Boolean(notice.window_title) && isPro(tier));
+  const canRemember = notice.can_remember ?? hasSpecificWindowTitle(notice.app_name, notice.window_title);
+  const [remember, setRemember] = useState(canRemember && isPro(tier));
   const selectedProject = eligible.find((p) => p.id === projectId);
   const currentProject = projects.find((p) => p.id === notice.project_id);
   return <div className="tracking-inbox__review">
@@ -102,10 +104,10 @@ function AssignmentReview({ notice }: { notice: TrackingNotice }) {
         options={eligible.map((p) => ({value:String(p.id),label:p.name}))} />}
     </Field>
     {notice.confidence != null && notice.confidence < 1 && <details className="tracking-inbox__evidence"><summary>Why this suggestion?</summary><p>{Math.round(notice.confidence * 100)}% of matching confirmations support this suggestion. You can choose a different project.</p></details>}
-    {isPro(tier) && <div className="tracking-inbox__remember"><Switch label="Remember this assignment" checked={remember} disabled={saving} onCheckedChange={setRemember}
-      description="Use the same app and window or file to assign future activity." /></div>}
+    {isPro(tier) && <div className="tracking-inbox__remember"><Switch label="Remember this assignment" checked={remember && canRemember} disabled={saving || !canRemember} onCheckedChange={setRemember}
+      description={canRemember ? 'Use the same app and window or file to assign future activity.' : 'This app shared no specific window or document. Assign this visit, or use a Focus project for future work.'} /></div>}
     <p className="tracking-inbox__privacy">Your confirmations help Duskry learn on this device.</p>
     <div className="tracking-inbox__actions"><button type="button" className="btn-secondary" disabled={saving} title="Keep the activity unchanged and dismiss this alert" onClick={() => void dismiss(notice.activity_id)}>Dismiss alert</button>
-      <button type="button" className="btn-primary" disabled={saving || !selectedProject} onClick={() => void correct(notice.activity_id, projectId, remember)}>{saving ? 'Saving…' : projectId !== notice.project_id && selectedProject ? `Assign to ${selectedProject.name}` : 'Confirm assignment'}</button></div>
+      <button type="button" className="btn-primary" disabled={saving || !selectedProject} onClick={() => void correct(notice.activity_id, projectId, remember && canRemember)}>{saving ? 'Saving…' : projectId !== notice.project_id && selectedProject ? `Assign to ${selectedProject.name}` : 'Confirm assignment'}</button></div>
   </div>;
 }

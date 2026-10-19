@@ -12,6 +12,7 @@ export interface TrackingNotice {
   confidence: number | null;
   reason: string;
   created_at: number;
+  can_remember?: boolean;
 }
 
 interface TrackingNoticeStore {

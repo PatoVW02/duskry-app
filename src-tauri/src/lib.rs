@@ -833,7 +833,7 @@ fn correct_tracking_assignment(
     // Prepare and validate before making any change to the activity.
     let pattern = if remember {
         Some(automation::correction_pattern(&activity_window(&activity))
-            .ok_or_else(|| "This activity has no window, website, or file context to remember. Assign it without remembering, or create an app rule in Rules.".to_string())?)
+            .ok_or_else(|| "This activity has no specific window, website, or file context to remember. Assign this visit without remembering, use a Focus project, or create an explicit app rule in Rules.".to_string())?)
     } else {
         None
     };
