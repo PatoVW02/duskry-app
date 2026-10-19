@@ -73,6 +73,7 @@ pub fn canonical_app_name(raw: &str) -> String {
     .to_lowercase()
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn display_app_name(raw: &str) -> String {
     match canonical_app_name(raw).as_str() {
         "google chrome" => "Google Chrome".into(),
