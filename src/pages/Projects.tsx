@@ -1,11 +1,12 @@
+import { projectColorText } from '../lib/projectColor';
 import { useEffect, useState } from 'react';
 import { format, fromUnixTime, isToday } from 'date-fns';
 import { useProjectStore } from '../stores/useProjectStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useActivityStore, type Activity } from '../stores/useActivityStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
-import { PROJECT_COLORS } from '../styles/tokens';
-import { Plus, ChevronDown, ChevronRight, X, Target, Lock, Trash2 } from 'lucide-react';
+import { ProjectEditor } from '../components/projects/ProjectEditor';
+import { Plus, ChevronDown, ChevronRight, X, Target, Lock, Trash2, Pencil } from 'lucide-react';
 import { errorMessage, formatDuration } from '../lib/utils';
 import { lockedFreeProjectIds } from '../lib/projectAccess';
 
@@ -85,6 +86,7 @@ function buildActivityGroups(activities: Activity[]): AppActivityGroup[] {
 export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
+  const updateProject = useProjectStore((s) => s.updateProject);
   const deleteProject = useProjectStore((s) => s.deleteProject);
   const { activeProjectId, setActiveProject } = useSettingsStore();
   const { tier } = useLicenseStore();
@@ -103,9 +105,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
 
   // ── project creation ───────────────────────────────
   const [showForm, setShowForm]   = useState(false);
-  const [name, setName]           = useState('');
-  const [color, setColor]         = useState(PROJECT_COLORS[0]);
-  const [creating, setCreating]   = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<number | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [focusSaving, setFocusSaving] = useState(false);
 
@@ -133,22 +133,6 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
       return () => clearInterval(id);
     }
   }, [viewDate, fetchForDate]);
-
-  const handleCreate = async () => {
-    if (!name.trim() || creating) return;
-    setCreating(true);
-    setProjectError(null);
-    try {
-      await createProject(name.trim(), color);
-      setName('');
-      setColor(PROJECT_COLORS[0]);
-      setShowForm(false);
-    } catch (error) {
-      setProjectError(errorMessage(error, 'The project could not be created.'));
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const handleFocusProject = async (projectId: number) => {
     if (focusSaving) return;
@@ -244,7 +228,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                     fontSize: 12, fontWeight: isActive ? 500 : 400,
                     background: isActive ? `${p.color}22` : 'rgba(255,255,255,0.05)',
                     border: `0.5px solid ${isActive ? p.color + '55' : 'rgba(255,255,255,0.10)'}`,
-                    color: isActive ? p.color : 'rgba(255,255,255,0.65)',
+                    color: isActive ? projectColorText(p.color) : 'rgba(255,255,255,0.65)',
                     transition: 'all 0.12s',
                   }}
                 >
@@ -310,7 +294,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
             </button>
           ) : (
             <button className="btn-primary" style={{ width: 'auto', padding: '6px 14px', fontSize: 12 }}
-              onClick={() => setShowForm(!showForm)}>
+              onClick={() => { setShowForm(!showForm); setEditingProjectId(null); }}>
               <Plus size={12} style={{ display: 'inline', marginRight: 5 }} />
               New project
             </button>
@@ -318,35 +302,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
         </div>
 
         {showForm && (
-          <div style={{
-            padding: '16px', borderRadius: 10, marginBottom: 16,
-            background: 'rgba(255,255,255,0.04)',
-            border: '0.5px solid rgba(255,255,255,0.10)',
-            display: 'flex', flexDirection: 'column', gap: 12,
-          }}>
-            <input
-              className="glass-input"
-              placeholder="Project name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleCreate(); }}
-              autoFocus
-            />
-            <div className="color-picker">
-              {PROJECT_COLORS.map((c) => (
-                <button key={c} className={`color-swatch ${color === c ? 'selected' : ''}`}
-                  style={{ backgroundColor: c }} onClick={() => setColor(c)} aria-label={c} />
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button type="button" className="btn-primary" onClick={() => void handleCreate()} disabled={creating || !name.trim()}>
-                {creating ? 'Creating…' : 'Create'}
-              </button>
-              <button className="btn-secondary" style={{ maxWidth: 100 }} onClick={() => setShowForm(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
+          <ProjectEditor onSave={createProject} onCancel={() => setShowForm(false)} />
         )}
 
         {projects.length === 0 ? (
@@ -386,7 +342,7 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                       <ChevronRight size={13} style={{ color: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
                     )}
                     <span className="project-dot" style={{ background: p.color, width: 10, height: 10 }} />
-                    <span style={{ fontSize: 13.5, flex: 1 }}>{p.name}</span>
+                    <span title={p.name} style={{ fontSize: 13.5, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                     {isLocked ? (
                       <button
                         onClick={(e) => { e.stopPropagation(); onUpgrade(); }}
@@ -405,10 +361,24 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                           {assignedActivities.length} activit{assignedActivities.length === 1 ? 'y' : 'ies'}
                         </span>
                         {projectTotalSecs > 0 && (
-                          <span style={{ fontSize: 11, color: p.color, fontVariantNumeric: 'tabular-nums', marginRight: 8 }}>
+                          <span style={{ fontSize: 11, color: projectColorText(p.color), fontVariantNumeric: 'tabular-nums', marginRight: 8 }}>
                             {formatDuration(projectTotalSecs)}
                           </span>
                         )}
+                        <button
+                          type="button"
+                          className="project-edit-button"
+                          aria-label={`Edit ${p.name}`}
+                          aria-expanded={editingProjectId === pid}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setEditingProjectId(editingProjectId === pid ? null : pid);
+                            setShowForm(false);
+                            setDeleteConfirmId(null);
+                          }}
+                        >
+                          <Pencil size={12} aria-hidden="true" /> Edit
+                        </button>
                         {deleteConfirmId === pid ? (
                           <>
                             <button
@@ -465,6 +435,15 @@ export function Projects({ onUpgrade }: { onUpgrade: () => void }) {
                       </>
                     )}
                   </div>
+
+                  {editingProjectId === pid && !isLocked && (
+                    <ProjectEditor
+                      key={pid}
+                      project={p}
+                      onSave={(nextName, nextColor) => updateProject(pid, nextName, nextColor)}
+                      onCancel={() => setEditingProjectId((current) => current === pid ? null : current)}
+                    />
+                  )}
 
                   {/* assigned activities panel */}
                   {activitiesOpen && (

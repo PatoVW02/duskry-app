@@ -6,6 +6,7 @@ mod logger;
 mod notify;
 mod paths;
 mod permissions;
+mod project;
 mod rules;
 mod tracker;
 mod tray;
@@ -375,6 +376,7 @@ fn get_projects() -> Result<Vec<db::Project>, String> {
 
 #[tauri::command]
 fn create_project(app: tauri::AppHandle, name: String, color: String) -> Result<i64, String> {
+    let (name, color) = project::validated_details(&name, &color)?;
     let tier = license::get_effective_tier();
     if feature_flags::billing_plans_enabled()
         && (tier == license::AppTier::Free || tier == license::AppTier::Expired)
@@ -390,6 +392,23 @@ fn create_project(app: tauri::AppHandle, name: String, color: String) -> Result<
     // keep tray in sync
     let _ = tray::rebuild_tray(&app);
     Ok(id)
+}
+
+#[tauri::command]
+fn update_project(
+    app: tauri::AppHandle,
+    project_id: i64,
+    name: String,
+    color: String,
+) -> Result<(), String> {
+    if project_id <= 0 {
+        return Err("Select a project to edit.".into());
+    }
+    validate_project_access(project_id)?;
+    let (name, color) = project::validated_details(&name, &color)?;
+    db::update_project(project_id, &name, &color).map_err(|error| error.to_string())?;
+    let _ = tray::rebuild_tray(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1054,6 +1073,7 @@ pub fn run() {
             assign_all_unassigned_today,
             get_projects,
             create_project,
+            update_project,
             delete_project,
             get_rules,
             create_rule,

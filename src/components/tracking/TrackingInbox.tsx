@@ -1,3 +1,4 @@
+import { projectColorText } from '../../lib/projectColor';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AppWindow, Bell, CheckCircle2, ChevronRight, X } from 'lucide-react';
@@ -97,7 +98,7 @@ function AssignmentReview({ notice }: { notice: TrackingNotice }) {
   const currentProject = projects.find((p) => p.id === notice.project_id);
   return <div className="tracking-inbox__review">
     <div className="tracking-inbox__activity"><span className="tracking-inbox__app-icon"><AppWindow size={19} /></span><div><strong>{notice.app_name}</strong><p>{notice.window_title || 'Untitled window'}</p></div></div>
-    <div className="tracking-inbox__current"><span>Currently assigned to</span><strong style={{color:currentProject?.color}}>{currentProject?.name ?? 'No project yet'}</strong></div>
+    <div className="tracking-inbox__current"><span>Currently assigned to</span><strong style={{color:currentProject ? projectColorText(currentProject.color) : undefined}}>{currentProject?.name ?? 'No project yet'}</strong></div>
     <p className="tracking-inbox__prompt">{notice.project_id ? 'Is this activity in the right project?' : 'Which project does this activity belong to?'}</p>
     <Field label="Project" optionalLabel="" description="This updates the activity shown above.">
       {(props) => <Select {...props} aria-label="Project" value={String(projectId || '')} disabled={saving} placeholder="Choose a project" onChange={(value) => setProjectId(Number(value))}

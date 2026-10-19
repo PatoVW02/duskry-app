@@ -1,3 +1,4 @@
+import { projectColorText } from '../../lib/projectColor';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
@@ -126,7 +127,7 @@ export function SmartRuleNotice({ onReview }: SmartRuleNoticeProps) {
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.48)', lineHeight: 1.5 }}>
               {Math.round(notice.confidence * 100)}% of {notice.total_count} matching activities
               {notice.day_count > 1 ? ` across ${notice.day_count} days` : ''} belong to{' '}
-              <span style={{ color: notice.project_color, fontWeight: 600 }}>
+              <span style={{ color: projectColorText(notice.project_color), fontWeight: 600 }}>
                 {notice.project_name}
               </span>
               . {notice.auto_created ? 'Future matches will be handled automatically when' : 'Duskry can handle future activities when'}{' '}

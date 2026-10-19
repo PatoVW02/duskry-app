@@ -7,6 +7,7 @@ import { useProjectStore, type Project } from '../stores/useProjectStore';
 import { useLicenseStore, isPro } from '../stores/useLicenseStore';
 import { errorMessage, formatDuration } from '../lib/utils';
 import { dragState } from '../lib/dragState';
+import { projectColorForeground } from '../lib/projectColor';
 import { activityContextLabel, activityTitleGroupKey, hasSpecificWindowTitle } from '../lib/activityContext';
 import { normalizeTimelineActivities } from '../lib/activityPresentation';
 import { groupActivitiesIntoBursts } from '../lib/activityBursts';
@@ -1792,7 +1793,7 @@ export function ActivityPage({
                   >
                     {height > 20 && (
                       <span style={{
-                        fontSize: 10.5, fontWeight: 600, color: proj ? '#0c251e' : 'rgba(255,255,255,0.88)',
+                        fontSize: 10.5, fontWeight: 600, color: proj ? projectColorForeground(proj.color) : 'rgba(255,255,255,0.88)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}>
                         {a.app_name}

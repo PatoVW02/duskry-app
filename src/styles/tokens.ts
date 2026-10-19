@@ -1,13 +1,31 @@
-export const PROJECT_COLORS = [
-  '#86EFAC',  // green
-  '#38BDF8',  // sky
-  '#2DD4BF',  // teal
-  '#A78BFA',  // purple
-  '#FB923C',  // orange
-  '#F472B6',  // pink
-  '#FBBF24',  // amber
-  '#60A5FA',  // blue
+export const PROJECT_COLOR_PRESETS = [
+  { color: '#86EFAC', name: 'Green' },
+  { color: '#38BDF8', name: 'Sky' },
+  { color: '#2DD4BF', name: 'Teal' },
+  { color: '#A78BFA', name: 'Purple' },
+  { color: '#FB923C', name: 'Orange' },
+  { color: '#F472B6', name: 'Pink' },
+  { color: '#FBBF24', name: 'Amber' },
+  { color: '#60A5FA', name: 'Blue' },
+  { color: '#F87171', name: 'Red' },
+  { color: '#FDA4AF', name: 'Rose' },
+  { color: '#FB7185', name: 'Coral' },
+  { color: '#FDBA74', name: 'Peach' },
+  { color: '#FDE047', name: 'Yellow' },
+  { color: '#FEF08A', name: 'Lemon' },
+  { color: '#BEF264', name: 'Lime' },
+  { color: '#34D399', name: 'Emerald' },
+  { color: '#6EE7B7', name: 'Mint' },
+  { color: '#22D3EE', name: 'Cyan' },
+  { color: '#7DD3FC', name: 'Light blue' },
+  { color: '#818CF8', name: 'Indigo' },
+  { color: '#C084FC', name: 'Violet' },
+  { color: '#E879F9', name: 'Fuchsia' },
+  { color: '#CBD5E1', name: 'Silver' },
+  { color: '#94A3B8', name: 'Slate' },
 ];
+
+export const PROJECT_COLORS = PROJECT_COLOR_PRESETS.map(({ color }) => color);
 
 export const colors = {
   projects: PROJECT_COLORS,

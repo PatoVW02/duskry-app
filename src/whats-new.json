@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.1.7",
+      "title": "Your Projects, Your Colors",
+      "summary": "Give every project its own color and edit project details while keeping your tracked history and assignments.",
+      "items": [
+        {
+          "icon": "SlidersHorizontal",
+          "text": "Choose from 24 preset project colors, expanded from the original eight."
+        },
+        {
+          "icon": "Eye",
+          "text": "Pick a custom color or enter a hex code when creating a project, editing it, or setting up your first project."
+        },
+        {
+          "icon": "FolderOpen",
+          "text": "Use the new Edit action in Projects to update a project's name and color while preserving its rules, assignments, and activity history."
+        },
+        {
+          "icon": "CheckSquare",
+          "text": "See saved project changes throughout the app, with readable labels and timeline text even when you choose a dark custom color."
+        }
+      ]
+    },
+    {
       "version": "1.1.6",
       "title": "Every Activity Within Reach",
       "summary": "Review activity without banners covering your work, move individual records more easily, and organize visits that have missing or generic window titles.",

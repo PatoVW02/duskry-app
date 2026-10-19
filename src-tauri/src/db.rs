@@ -1551,6 +1551,22 @@ pub fn create_project(name: &str, color: &str) -> Result<i64> {
     Ok(conn.last_insert_rowid())
 }
 
+pub fn update_project(project_id: i64, name: &str, color: &str) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    update_project_conn(&conn, project_id, name, color)
+}
+
+fn update_project_conn(conn: &Connection, project_id: i64, name: &str, color: &str) -> Result<()> {
+    if conn.execute(
+        "UPDATE projects SET name = ?1, color = ?2 WHERE id = ?3",
+        params![name, color, project_id],
+    )? == 0
+    {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(())
+}
+
 pub fn delete_project(project_id: i64) -> Result<()> {
     let conn = DB.lock().expect("db lock");
     conn.execute(
@@ -1853,6 +1869,65 @@ mod tests {
         conn.execute_batch("INSERT INTO projects (id, name) VALUES (1, 'Old project'), (2, 'Duskry'); INSERT INTO activities (id, app_name, window_title, started_at) VALUES (1, 'Editor', 'Duskry', 100); INSERT INTO assignments (activity_id, project_id, source) VALUES (1, 1, 'manual_rule'); INSERT INTO tracking_notices (activity_id, reason, created_at) VALUES (1, 'Review', 100);").unwrap();
         let activity = serde_json::from_value(serde_json::json!({"id":1,"app_name":"Editor","window_title":"Duskry","started_at":100,"time_clipped":false,"project_id":1,"source":"manual_rule"})).unwrap();
         (conn, activity)
+    }
+
+    #[test]
+    fn editing_project_details_preserves_its_identity_rules_and_activity_history() {
+        let (conn, _) = review_fixture();
+        conn.execute_batch("UPDATE projects SET created_at = 123, icon = 'briefcase' WHERE id = 1; INSERT INTO rules (project_id, field, operator, value) VALUES (1, 'app', 'equals', 'Editor'); INSERT INTO rule_learning_events (activity_id, project_id, app_name, updated_at) VALUES (1, 1, 'Editor', 100);").unwrap();
+        update_project_conn(&conn, 1, "Client Work", "#123456").unwrap();
+        let details = conn
+            .query_row(
+                "SELECT name, color, icon, created_at FROM projects WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            details,
+            (
+                "Client Work".into(),
+                "#123456".into(),
+                "briefcase".into(),
+                123
+            )
+        );
+        for table in ["assignments", "rules", "rule_learning_events"] {
+            assert_eq!(
+                conn.query_row(&format!("SELECT project_id FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM activities", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT name FROM projects WHERE id = 2", [], |row| row
+                .get::<_, String>(
+                0
+            ))
+            .unwrap(),
+            "Duskry"
+        );
+        assert!(update_project_conn(&conn, 999, "Missing", "#654321").is_err());
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM projects", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
     }
 
     #[test]

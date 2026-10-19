@@ -1,3 +1,4 @@
+import { projectColorText } from '../lib/projectColor';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { format, fromUnixTime } from 'date-fns';
@@ -94,7 +95,7 @@ function TimelineBlock({
         ) : multiApp ? (
           <span className="timeline-block__switches">{burst.switchCount} switches</span>
         ) : null}
-        <span className="timeline-block__duration" style={{ color: project?.color }}>{formatDuration(burst.durationS)}</span>
+        <span className="timeline-block__duration" style={{ color: project ? projectColorText(project.color) : undefined }}>{formatDuration(burst.durationS)}</span>
         {multiApp && (expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
       </span>
     </>

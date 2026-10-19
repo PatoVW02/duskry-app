@@ -1,3 +1,4 @@
+import { projectColorText } from '../../lib/projectColor';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isToday } from 'date-fns';
@@ -522,7 +523,7 @@ function ActivityRow({
               borderRadius: 999,
               background: proj ? `${proj.color}18` : 'rgba(255, 255, 255, 0.07)',
               border: `0.5px solid ${proj ? `${proj.color}55` : 'rgba(255, 255, 255, 0.15)'}`,
-              color: proj ? proj.color : 'rgba(255, 255, 255, 0.38)',
+              color: proj ? projectColorText(proj.color) : 'rgba(255, 255, 255, 0.38)',
             }}
           />
         </div>
