@@ -29,17 +29,28 @@ html, body, #root {
   overflow: hidden;
 }
 
-html, body, #root, #root * {
+html, body, #root {
   user-select: text;
   -webkit-user-select: text;
 }
 
 button,
+button *,
 .sidebar,
+.sidebar *,
 [data-tauri-drag-region] {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* Lock selection for the complete pointer gesture, including the first few pixels. */
+html[data-activity-drag],
+html[data-activity-drag] * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+html[data-activity-drag='active'] * { cursor: grabbing !important; }
+[data-activity-drag-source] { cursor: grab; }
 
 :where(button, a, input, select, textarea, [role='button'], [tabindex]):focus-visible {
   outline: 2px solid rgba(94, 234, 212, 0.92);

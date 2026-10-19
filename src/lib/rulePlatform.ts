@@ -7,7 +7,7 @@ export function detectMacOS(platform: string, userAgent: string): boolean {
 }
 
 export function isRuleFieldSupported(field: string, runningOnMacOS: boolean): boolean {
-  return field !== 'url' || runningOnMacOS;
+  return !['url', 'path'].includes(field) || runningOnMacOS;
 }
 
 export function supportedRuleFieldOptions<T extends RuleFieldOption>(

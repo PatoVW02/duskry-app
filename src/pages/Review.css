@@ -644,6 +644,11 @@
     flex-direction: column;
   }
 
+  .review-overview__copy {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
   .review-overview__stats {
     min-width: 0;
   }

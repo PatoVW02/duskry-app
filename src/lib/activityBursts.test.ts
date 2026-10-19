@@ -20,6 +20,21 @@ function activity(overrides: Partial<Activity> & Pick<Activity, 'id' | 'app_name
 }
 
 describe('groupActivitiesIntoBursts', () => {
+  it('keeps an automatic best guess in the review queue even when its confidence is high', () => {
+    const [burst] = groupActivitiesIntoBursts([
+      activity({id:1,app_name:'Code',started_at:100,project_id:7,source:'best_guess',assignment_confidence:0.95}),
+    ]);
+    expect(burst.needsAttention).toBe(true);
+    expect(burst.projectId).toBeNull();
+    expect(burst.suggestedProjectId).toBe(7);
+  });
+  it('does not use an unconfirmed guess as evidence for another block', () => {
+    const bursts = groupActivitiesIntoBursts([
+      activity({id:1,app_name:'Chrome',started_at:100,project_id:7,source:'best_guess'}),
+      activity({id:2,app_name:'Chrome',started_at:1000}),
+    ]);
+    expect(bursts[1].suggestedProjectId).toBeNull();
+  });
   it('groups rapid app switching into one compact block', () => {
     const bursts = groupActivitiesIntoBursts([
       activity({ id: 1, app_name: 'Figma', started_at: 100, duration_s: 70 }),

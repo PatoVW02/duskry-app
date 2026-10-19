@@ -15,8 +15,17 @@
 let _ids: number[] = [];
 let _hoverId: number | null = null;
 
+function preventSelection(event: Event) { event.preventDefault(); }
+
 export const dragState = {
+  prepare() {
+    document.documentElement.dataset.activityDrag = 'pending';
+    document.addEventListener('selectstart', preventSelection, true);
+  },
   start(ids: number[]) {
+    this.prepare();
+    document.documentElement.dataset.activityDrag = 'active';
+    window.getSelection()?.removeAllRanges();
     _ids = ids;
     _hoverId = null;
     window.dispatchEvent(new Event('duskry-drag-start'));
@@ -29,9 +38,10 @@ export const dragState = {
   getHover(): number | null { return _hoverId; },
   getIds(): number[] { return _ids; },
   clear() {
+    delete document.documentElement.dataset.activityDrag;
+    document.removeEventListener('selectstart', preventSelection, true);
     _ids = [];
     _hoverId = null;
     window.dispatchEvent(new Event('duskry-drag-end'));
   },
 };
-

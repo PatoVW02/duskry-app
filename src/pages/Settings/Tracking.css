@@ -1,0 +1,22 @@
+.tracking-settings { display: grid; gap: 16px; padding-bottom: 16px; }
+.tracking-save-status { min-height: 16px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; color: rgba(255,255,255,.52); font-size: 11px; }
+.tracking-section { min-width: 0; padding: 22px; display: grid; gap: 19px; }
+.tracking-section__header { display: flex; gap: 11px; align-items: flex-start; }
+.tracking-section__header > svg { color: #72d5c3; margin-top: 2px; flex: none; }
+.tracking-section__header h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.02em; }
+.tracking-section__header p { margin: 4px 0 0; color: rgba(255,255,255,.6); font-size: 12px; line-height: 1.5; }
+.tracking-assignment-options .duskry-ui-radio-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.tracking-assignment-options .duskry-ui-radio-option-surface { height: 100%; padding: 14px; gap: 6px; }
+.tracking-assignment-options .duskry-ui-radio-option-label { font-size: 12.5px; }
+.tracking-assignment-options .duskry-ui-radio-option-description { font-size: 11.5px; line-height: 1.55; }
+.tracking-context-note { margin: -8px 0 0; font-size: 11.5px; line-height: 1.55; color: rgba(255,255,255,.56); }
+.tracking-learning { display: grid; gap: 16px; border-top: 1px solid rgba(255,255,255,.1); padding-top: 18px; }
+.tracking-settings .duskry-ui-disclosure-panel { display: grid; gap: 14px; }
+.tracking-settings .duskry-ui-disclosure-panel[hidden] { display: none; }
+.tracking-system-note { margin: 0; display: flex; align-items: flex-start; gap: 9px; font-size: 11.5px; line-height: 1.6; color: rgba(255,255,255,.6); }
+.tracking-system-note svg { flex: none; margin-top: 2px; color: #72d5c3; }
+.tracking-feedback { margin: 0; padding: 11px 13px; border-radius: 8px; font-size: 12px; line-height: 1.6; }
+.tracking-feedback--error { background: rgba(239,68,68,.08); border: 1px solid rgba(252,165,165,.22); color: #fecaca; }
+.tracking-feedback button,.tracking-upgrade button { margin-left: 8px; border: 0; background: transparent; color: #7ee5ce; text-decoration: underline; cursor: pointer; }
+.tracking-upgrade { font-size: 11.5px; color: #e2c589; }
+@media (max-width: 1000px) { .tracking-section { padding: 18px; } .tracking-assignment-options .duskry-ui-radio-options { grid-template-columns: 1fr; } }

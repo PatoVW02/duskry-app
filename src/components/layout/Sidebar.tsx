@@ -6,6 +6,7 @@ import { lockedFreeProjectIds } from '../../lib/projectAccess';
 import { targetableProjects } from '../../lib/projectTargets';
 import { isPro, useLicenseStore } from '../../stores/useLicenseStore';
 import { useProjectStore } from '../../stores/useProjectStore';
+import { TrackingInbox } from '../tracking/TrackingInbox';
 import { SidebarProjectList } from './SidebarProjectList';
 // dragState window events ('duskry-drag-start', 'duskry-drag-end', 'duskry-drag-hover')
 // are used in useEffect below to drive isDragging / dragOver state.
@@ -94,6 +95,7 @@ export function Sidebar({ activePage, onNavigate }: Props) {
       />
 
       <div className="sidebar-footer">
+        <TrackingInbox />
         <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.22)', textAlign: 'center' }}>
           {appVersion ? `Duskry v${appVersion}` : 'Duskry'}
         </div>

@@ -64,7 +64,8 @@ export function Permissions() {
 
         <PermRow
           title="Notifications"
-          description="Optional. Enables morning focus reminders to set your project for the day."
+          preference
+          description="Optional. Enables tracking session alerts and assignment review. OS settings control banner delivery."
           state={status.notifications}
           onGrant={async () => {
             await invoke('request_notification_permission');
@@ -97,12 +98,14 @@ function PermRow({
   state,
   onGrant,
   required,
+  preference,
 }: {
   title: string;
   description: string;
   state: PermissionState;
   onGrant: () => void;
   required?: boolean;
+  preference?: boolean;
 }) {
   return (
     <div className="permission-row">
@@ -120,19 +123,19 @@ function PermRow({
 
       {state === 'granted' ? (
         <span className="permission-status-granted" style={{ display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-          <CheckCircle size={13} /> Granted
+          <CheckCircle size={13} /> {preference ? 'Enabled in Duskry' : 'Granted'}
         </span>
       ) : state === 'denied' ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'rgba(239,68,68,0.8)', whiteSpace: 'nowrap' }}>
-            <XCircle size={13} /> Not granted
+            <XCircle size={13} /> {preference ? 'Disabled in Duskry' : 'Not granted'}
           </span>
           <button
             className="btn-secondary"
             style={{ width: 'auto', padding: '5px 12px', fontSize: 11.5 }}
             onClick={onGrant}
           >
-            Grant →
+            {preference ? 'Enable →' : 'Grant →'}
           </button>
         </div>
       ) : (

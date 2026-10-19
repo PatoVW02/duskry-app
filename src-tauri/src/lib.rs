@@ -1,3 +1,4 @@
+mod automation;
 mod db;
 pub(crate) mod feature_flags;
 mod license;
@@ -186,7 +187,9 @@ fn assign_activities_internal(
 
     let learned: Vec<db::Activity> = previous
         .into_iter()
-        .filter(|activity| activity.project_id != Some(project_id))
+        .filter(|activity| {
+            activity.project_id != Some(project_id) || activity.source.as_deref() != Some("manual")
+        })
         .collect();
     if !learned.is_empty() {
         // Corrections must update existing learned-rule confidence even when
@@ -805,6 +808,86 @@ fn set_rules_override(enabled: bool) -> Result<(), String> {
 // ─── Notifications ───────────────────────────────────────────────────────────
 
 #[tauri::command]
+fn get_tracking_notices(activity_id: Option<i64>) -> Result<Vec<db::TrackingNotice>, String> {
+    db::get_tracking_notices(activity_id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn take_notification_activity() -> i64 {
+    notify::take_open_activity()
+}
+
+#[tauri::command]
+fn dismiss_tracking_notice(activity_id: i64) -> Result<(), String> {
+    db::resolve_tracking_notice(activity_id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn correct_tracking_assignment(
+    activity_id: i64,
+    project_id: i64,
+    remember: bool,
+) -> Result<(), String> {
+    validate_assignment_project_access(project_id)?;
+    let activity = db::get_activity(activity_id).map_err(|error| error.to_string())?;
+    // Prepare and validate before making any change to the activity.
+    let pattern = if remember {
+        Some(automation::correction_pattern(&activity_window(&activity))
+            .ok_or_else(|| "This activity has no window, website, or file context to remember. Assign it without remembering, or create an app rule in Rules.".to_string())?)
+    } else {
+        None
+    };
+    if let Some(ref pattern) = pattern {
+        rules::validate_rule("compound", "matches", pattern)?;
+    }
+    if remember
+        && feature_flags::billing_plans_enabled()
+        && matches!(
+            license::get_effective_tier(),
+            license::AppTier::Free | license::AppTier::Expired
+        )
+    {
+        return Err("Upgrade to Pro to remember project rules.".into());
+    }
+    let priority = db::get_all_rules()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .filter(|rule| rules::rule_matches_one(rule, &activity_window(&activity)))
+        .map(|rule| rule.priority)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    db::confirm_tracking_assignment(&activity, project_id, pattern.as_deref(), priority)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = refresh_learned_rules() {
+        logger::tlog(&format!(
+            "Assignment saved; learned-rule stats refresh failed: {error}"
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_launch_at_login(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    }
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn request_notification_permission() -> Result<(), String> {
     db::set_setting("notifications_enabled", "true").map_err(|e| e.to_string())?;
     notify::request_notification_permission();
@@ -899,7 +982,10 @@ fn save_file(content: String, filename: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|arg| arg == "--background") {
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -908,7 +994,14 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--background"])
+                .build(),
+        )
         .setup(|app| {
+            notify::initialize(app.handle())?;
             // ── Restore persisted state into atomics ────────────────────
             refresh_active_project_state();
 
@@ -940,6 +1033,10 @@ pub fn run() {
 
             // ── Set up menu bar tray ─────────────────────────────────────
             tray::setup_tray(app.handle())?;
+
+            if onboarding_complete && std::env::args().any(|arg| arg == "--background") {
+                hide_main_window(app.handle());
+            }
 
             Ok(())
         })
@@ -994,6 +1091,12 @@ pub fn run() {
             get_rules_override,
             set_rules_override,
             request_notification_permission,
+            get_tracking_notices,
+            take_notification_activity,
+            dismiss_tracking_notice,
+            correct_tracking_assignment,
+            get_launch_at_login,
+            set_launch_at_login,
             notify_update_ready,
             get_notifications_enabled,
             get_database_startup_error,

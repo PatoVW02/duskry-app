@@ -49,17 +49,10 @@ pub fn apply_rules(window: &ActiveWindow, rules: &[Rule]) -> Option<RuleMatch> {
     )
 }
 
-/// Evaluate only app-name and URL rules. Used for the focus-project override check.
-pub fn apply_app_url_rules(window: &ActiveWindow, rules: &[Rule]) -> Option<RuleMatch> {
-    best_match(
-        window,
-        rules.iter().filter(|rule| {
-            rule.enabled
-                && ((rule.field == "app" || rule.field == "url")
-                    || compound_uses_only_app_url(rule))
-                && rule_matches(rule, window)
-        }),
-    )
+pub fn has_matching_rules(window: &ActiveWindow, rules: &[Rule]) -> bool {
+    rules
+        .iter()
+        .any(|rule| rule.enabled && rule_matches(rule, window))
 }
 
 fn best_match<'a>(
@@ -252,12 +245,25 @@ fn condition_matches(
     }
 
     let haystack = match field {
-        "app" => window.app_name.to_lowercase(),
-        "title" => window.window_title.to_lowercase(),
-        "path" => window.file_path.as_deref().unwrap_or("").to_lowercase(),
+        "app" if operator == "equals" => crate::automation::canonical_app_name(&window.app_name),
+        "app" => window.app_name.trim().to_lowercase(),
+        "title" => window.window_title.trim().to_lowercase(),
+        "path" => window
+            .file_path
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase(),
         _ => return false,
     };
-    let needle = value.to_lowercase();
+    if haystack.is_empty() {
+        return false;
+    }
+    let needle = if field == "app" && operator == "equals" {
+        crate::automation::canonical_app_name(value)
+    } else {
+        value.trim().to_lowercase()
+    };
     let matched = match operator {
         "contains" => haystack.contains(&needle),
         "equals" => haystack == needle,
@@ -348,31 +354,13 @@ fn node_matches(node: &RuleNode, window: &ActiveWindow) -> bool {
     }
 }
 
-fn compound_uses_only_app_url(rule: &Rule) -> bool {
-    if rule.field != "compound" {
-        return false;
-    }
-    serde_json::from_str::<CompoundRule>(&rule.value)
-        .map(|compound| {
-            !compound.conditions.is_empty()
-                && compound.conditions.iter().all(node_uses_only_app_url)
-        })
-        .unwrap_or(false)
-}
-
-fn node_uses_only_app_url(node: &RuleNode) -> bool {
+fn node_uses_field(node: &RuleNode, field: &str) -> bool {
     match node {
-        RuleNode::Group(group) => {
-            !group.conditions.is_empty() && group.conditions.iter().all(node_uses_only_app_url)
-        }
-        RuleNode::Condition(condition) => condition.field == "app" || condition.field == "url",
-    }
-}
-
-fn node_uses_url(node: &RuleNode) -> bool {
-    match node {
-        RuleNode::Group(group) => group.conditions.iter().any(node_uses_url),
-        RuleNode::Condition(condition) => condition.field == "url",
+        RuleNode::Group(group) => group
+            .conditions
+            .iter()
+            .any(|node| node_uses_field(node, field)),
+        RuleNode::Condition(condition) => condition.field == field,
     }
 }
 
@@ -387,13 +375,31 @@ pub fn validate_platform_capabilities(
     let uses_url = field == "url"
         || (field == "compound"
             && serde_json::from_str::<CompoundRule>(value)
-                .map(|compound| compound.conditions.iter().any(node_uses_url))
+                .map(|compound| {
+                    compound
+                        .conditions
+                        .iter()
+                        .any(|node| node_uses_field(node, "url"))
+                })
                 .unwrap_or(false));
     if uses_url {
         return Err(
             "Website rules are unavailable on this platform because Duskry cannot capture browser hostnames."
                 .to_string(),
         );
+    }
+    let uses_path = field == "path"
+        || (field == "compound"
+            && serde_json::from_str::<CompoundRule>(value)
+                .map(|compound| {
+                    compound
+                        .conditions
+                        .iter()
+                        .any(|node| node_uses_field(node, "path"))
+                })
+                .unwrap_or(false));
+    if uses_path {
+        return Err("File path rules are unavailable on this platform because Duskry cannot capture document paths.".into());
     }
     Ok(())
 }
@@ -529,6 +535,33 @@ fn valid_hour_condition_value(operator: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_title_or_document_never_matches_a_negated_condition() {
+        let mut w = window();
+        w.window_title.clear();
+        w.file_path = None;
+        for field in ["title", "path"] {
+            assert!(!condition_matches(
+                field,
+                "contains",
+                "Other project",
+                true,
+                &w
+            ));
+        }
+    }
+
+    #[test]
+    fn app_equality_understands_process_aliases_and_trims_rule_input() {
+        let mut w = window();
+        w.app_name = "Code".into();
+        assert!(rule_matches_one(
+            &rule("app", "equals", " Visual Studio Code "),
+            &w
+        ));
+        assert!(rule_matches_one(&rule("title", "contains", " Duskry "), &w));
+    }
 
     fn window() -> ActiveWindow {
         ActiveWindow {
@@ -668,6 +701,10 @@ mod tests {
         assert!(validate_platform_capabilities("compound", &nested, false).is_err());
         assert!(validate_platform_capabilities("compound", &app_only, false).is_ok());
         assert!(validate_platform_capabilities("url", "example.com", true).is_ok());
+        assert!(validate_platform_capabilities("path", r"C:\work\project", false).is_err());
+        assert!(validate_platform_capabilities("path", "/work/project", true).is_ok());
+        let path_group = serde_json::json!({"combinator":"or","conditions":[{"field":"path","operator":"contains","value":"project"}]}).to_string();
+        assert!(validate_platform_capabilities("compound", &path_group, false).is_err());
     }
 
     #[test]

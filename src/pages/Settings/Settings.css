@@ -199,18 +199,31 @@
   }
 
   .settings-navigation__groups {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 5px;
     padding-top: 0;
+  }
+
+  .settings-navigation__group {
+    display: contents;
   }
 
   .settings-navigation__group-label {
-    padding-top: 0;
+    display: none;
   }
 
   .settings-navigation__item {
-    min-height: 42px;
+    width: auto;
+    min-height: 36px;
+    padding: 6px 9px;
+    gap: 6px;
+  }
+
+  .settings-navigation__icon {
+    width: 23px;
+    height: 23px;
   }
 
   .settings-navigation__copy small {
@@ -219,19 +232,6 @@
 }
 
 @media (max-width: 760px) {
-  .settings-navigation__groups {
-    grid-template-columns: 1fr;
-  }
-
-  .settings-navigation__group {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .settings-navigation__group-label {
-    grid-column: 1 / -1;
-  }
-
   .settings-content-header {
     align-items: flex-start;
   }

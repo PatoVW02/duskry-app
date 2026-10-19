@@ -134,6 +134,15 @@ fn init_schema(conn: &Connection) -> Result<()> {
             CHECK (id = 1)
         );
 
+        CREATE TABLE IF NOT EXISTS tracking_notices (
+            activity_id INTEGER PRIMARY KEY REFERENCES activities(id) ON DELETE CASCADE,
+            suggested_project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+            confidence REAL,
+            reason TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            resolved INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -552,6 +561,101 @@ pub struct LearningEvent {
     pub domain: Option<String>,
     pub file_path: Option<String>,
     pub started_at: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct TrackingNotice {
+    pub activity_id: i64,
+    pub app_name: String,
+    pub window_title: Option<String>,
+    pub project_id: Option<i64>,
+    pub suggested_project_id: Option<i64>,
+    pub confidence: Option<f64>,
+    pub reason: String,
+    pub created_at: i64,
+}
+
+pub fn save_tracking_notice(
+    activity_id: i64,
+    suggested_project_id: Option<i64>,
+    confidence: Option<f64>,
+    reason: &str,
+) -> Result<()> {
+    let conn = DB.lock().expect("db lock");
+    conn.execute("INSERT OR IGNORE INTO tracking_notices (activity_id, suggested_project_id, confidence, reason, created_at) VALUES (?1, ?2, ?3, ?4, unixepoch())",
+        params![activity_id, suggested_project_id, confidence, reason])?;
+    Ok(())
+}
+
+pub fn get_tracking_notices(activity_id: Option<i64>) -> Result<Vec<TrackingNotice>> {
+    let conn = DB.lock().expect("db lock");
+    let mut statement = conn.prepare("SELECT n.activity_id, a.app_name, a.window_title, ass.project_id, n.suggested_project_id, n.confidence, n.reason, n.created_at FROM tracking_notices n JOIN activities a ON a.id = n.activity_id LEFT JOIN assignments ass ON ass.activity_id = a.id WHERE n.resolved = 0 ORDER BY (n.activity_id = ?1) DESC, n.created_at DESC, n.activity_id DESC LIMIT 50")?;
+    let rows = statement.query_map(params![activity_id.unwrap_or(0)], |row| {
+        Ok(TrackingNotice {
+            activity_id: row.get(0)?,
+            app_name: row.get(1)?,
+            window_title: row.get(2)?,
+            project_id: row.get(3)?,
+            suggested_project_id: row.get(4)?,
+            confidence: row.get(5)?,
+            reason: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn resolve_tracking_notice(activity_id: i64) -> Result<()> {
+    DB.lock().expect("db lock").execute(
+        "UPDATE tracking_notices SET resolved = 1 WHERE activity_id = ?1",
+        params![activity_id],
+    )?;
+    Ok(())
+}
+
+pub fn confirm_tracking_assignment(
+    activity: &Activity,
+    project_id: i64,
+    pattern: Option<&str>,
+    priority: i32,
+) -> Result<()> {
+    let mut conn = DB.lock().expect("db lock");
+    confirm_tracking_assignment_conn(&mut conn, activity, project_id, pattern, priority)
+}
+
+fn confirm_tracking_assignment_conn(
+    conn: &mut Connection,
+    activity: &Activity,
+    project_id: i64,
+    pattern: Option<&str>,
+    priority: i32,
+) -> Result<()> {
+    let transaction = conn.transaction()?;
+    let id = activity.id.ok_or(rusqlite::Error::InvalidQuery)?;
+    transaction.execute("INSERT OR REPLACE INTO assignments (activity_id, project_id, source) VALUES (?1, ?2, 'manual')", params![id, project_id])?;
+    transaction.execute("INSERT OR REPLACE INTO rule_learning_events (activity_id, project_id, app_name, window_title, domain, file_path, started_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch())",
+        params![id, project_id, activity.app_name.trim(), activity.window_title, activity.domain.as_deref().and_then(crate::rules::normalized_host), activity.file_path, activity.started_at])?;
+    if let Some(pattern) = pattern {
+        create_rule_with_metadata_conn(
+            &transaction,
+            project_id,
+            "compound",
+            "matches",
+            pattern,
+            RuleMetadata {
+                priority,
+                source: "manual",
+                enabled: true,
+                confidence: None,
+                support_count: 0,
+            },
+        )?;
+    }
+    transaction.execute(
+        "UPDATE tracking_notices SET resolved = 1 WHERE activity_id = ?1",
+        params![id],
+    )?;
+    transaction.commit()
 }
 
 pub struct RuleMetadata<'a> {
@@ -1124,20 +1228,6 @@ fn build_confident_candidates(
 
     let events = get_learning_events_conn(conn)?;
     let existing_rules = get_all_rules_conn(conn)?;
-    let current_window = crate::tracker::ActiveWindow {
-        app_name: activity.app_name.clone(),
-        window_title: activity.window_title.clone().unwrap_or_default(),
-        url: activity.domain.clone(),
-        file_path: activity.file_path.clone(),
-        timestamp: activity.started_at,
-    };
-    if existing_rules.iter().any(|rule| {
-        let mut rule = rule.clone();
-        rule.enabled = true;
-        crate::rules::rule_matches_one(&rule, &current_window)
-    }) {
-        return Ok(Vec::new());
-    }
     let mut candidates = Vec::new();
 
     for (field, operator, value, label, specificity) in raw_candidates {
@@ -1725,6 +1815,91 @@ pub fn assign_all_unassigned_today(project_id: i64) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn review_fixture() -> (Connection, Activity) {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO projects (id, name) VALUES (1, 'Old project'), (2, 'Duskry'); INSERT INTO activities (id, app_name, window_title, started_at) VALUES (1, 'Editor', 'Duskry', 100); INSERT INTO assignments (activity_id, project_id, source) VALUES (1, 1, 'manual_rule'); INSERT INTO tracking_notices (activity_id, reason, created_at) VALUES (1, 'Review', 100);").unwrap();
+        let activity = serde_json::from_value(serde_json::json!({"id":1,"app_name":"Editor","window_title":"Duskry","started_at":100,"time_clipped":false,"project_id":1,"source":"manual_rule"})).unwrap();
+        (conn, activity)
+    }
+
+    #[test]
+    fn tracking_confirmation_commits_assignment_evidence_rule_and_resolution_together() {
+        let (mut conn, activity) = review_fixture();
+        let pattern =
+            crate::automation::correction_pattern(&crate::activity_window(&activity)).unwrap();
+        confirm_tracking_assignment_conn(&mut conn, &activity, 2, Some(&pattern), 1).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT project_id FROM assignments WHERE activity_id = 1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT project_id FROM rule_learning_events WHERE activity_id = 1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT resolved FROM tracking_notices WHERE activity_id = 1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        let matched = crate::rules::apply_rules(
+            &crate::activity_window(&activity),
+            &get_all_rules_conn(&conn).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(matched.project_id, 2);
+    }
+
+    #[test]
+    fn failed_remembering_rolls_back_the_assignment_and_keeps_the_alert_pending() {
+        let (mut conn, activity) = review_fixture();
+        conn.execute_batch("CREATE TRIGGER fail_rule BEFORE INSERT ON rules BEGIN SELECT RAISE(ABORT, 'write failed'); END;").unwrap();
+        let pattern =
+            crate::automation::correction_pattern(&crate::activity_window(&activity)).unwrap();
+        assert!(
+            confirm_tracking_assignment_conn(&mut conn, &activity, 2, Some(&pattern), 1).is_err()
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT project_id FROM assignments WHERE activity_id = 1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM rule_learning_events", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT resolved FROM tracking_notices WHERE activity_id = 1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn schema_migration_adds_rule_provenance_and_assignment_explanations() {

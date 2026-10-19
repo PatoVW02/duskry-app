@@ -468,9 +468,7 @@ export function Rules({ onUpgrade, onOpenProjects }: RulesProps) {
           <div>
             <strong>Rules can override the focus project</strong>
             <span>
-              {RUNNING_ON_MACOS
-                ? 'When a matching application or website rule is more specific, use its target project.'
-                : 'When a matching application, window title, or file path rule is more specific, use its target project.'}
+              Matching app, window, website, and file rules take priority. Conflicting rules ask for review.
             </span>
           </div>
           <button
@@ -649,7 +647,7 @@ export function Rules({ onUpgrade, onOpenProjects }: RulesProps) {
                   expanded={expandedRuleIds.has(ruleId)}
                   busy={busyRuleIds.has(ruleId)}
                   confirmingDelete={deleteConfirmId === ruleId}
-                  platformUnavailable={!isRuleFieldSupported('url', RUNNING_ON_MACOS) && ruleUsesField(rule, 'url')}
+                  platformUnavailable={['url', 'path'].some((field) => !isRuleFieldSupported(field, RUNNING_ON_MACOS) && ruleUsesField(rule, field))}
                   onToggleDetails={() => toggleRuleDetails(ruleId)}
                   onToggle={() => void toggleRule(rule)}
                   onAskDelete={() => setDeleteConfirmId(ruleId)}
@@ -795,7 +793,7 @@ function StoredRuleCard({
           </div>
           {platformUnavailable && (
             <p className="rules-page__details-note">
-              Website hostname matching is unavailable on Windows because Windows activity tracking does not capture browser hostnames.
+              Website and document-path matching are unavailable on Windows because activity tracking captures app and window names only.
             </p>
           )}
           {learned && confidence != null && (

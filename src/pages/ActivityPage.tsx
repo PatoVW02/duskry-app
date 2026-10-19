@@ -168,6 +168,12 @@ function AppIcon({ name }: { name: string }) {
 // We use pointer events + setPointerCapture instead.
 // elementFromPoint works correctly during pointer events (unlike during drag events).
 
+const projectAtPoint = (x: number, y: number): number | null => {
+  const target = document.elementFromPoint(x, y)?.closest('[data-drop-project-id]');
+  const id = Number(target?.getAttribute('data-drop-project-id'));
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+};
+
 // Returns the shared project_id if every activity in the group shares one, else null
 function unanimousProjectId(activityIds: number[], activities: Activity[]): number | null {
   const idSet = new Set(activityIds);
@@ -917,6 +923,7 @@ export function ActivityPage({
 
   // Timeline state
   const scrollRef = useRef<HTMLDivElement>(null);
+  const positionedTimeline = useRef<string | null>(null);
   const [hovered, setHovered] = useState<Activity | null>(null);
   const [tipPos,  setTipPos]  = useState<TPos>({ x: 0, y: 0 });
   const [nowY,    setNowY]    = useState<number | null>(null);
@@ -967,13 +974,6 @@ export function ActivityPage({
     return () => clearInterval(id);
   }, [tsToY, viewingToday]);
 
-  // Scroll timeline to current hour on date change
-  useEffect(() => {
-    if (!scrollRef.current) return;
-    const targetHour = viewingToday ? Math.max(0, new Date().getHours() - 3) : 8;
-    scrollRef.current.scrollTop = targetHour * HOUR_HEIGHT;
-  }, [viewDateKey, viewingToday]);
-
   useEffect(() => {
     const visibleIds = new Set((hasCurrentDateData ? activities : []).map((activity) => activity.id));
     setSelectedActivityIds((current) => {
@@ -997,6 +997,17 @@ export function ActivityPage({
     () => hasCurrentDateData ? activities : [],
     [activities, hasCurrentDateData],
   );
+  useEffect(() => {
+    if (!hasCurrentDateData || !scrollRef.current) return;
+    const key = `${viewDateKey}:${currentActivities.length > 0}`;
+    if (positionedTimeline.current === key) return;
+    const first = currentActivities.length ? Math.min(...currentActivities.map((a) => a.started_at)) : null;
+    scrollRef.current.scrollTop = first == null
+      ? (viewingToday ? Math.max(0, new Date().getHours() - 3) : 8) * HOUR_HEIGHT
+      : Math.max(0, tsToY(first) - 24);
+    positionedTimeline.current = key;
+  }, [currentActivities, hasCurrentDateData, tier, tsToY, viewDateKey, viewingToday]);
+
   const activityBursts = useMemo(
     () => groupActivitiesIntoBursts(currentActivities),
     [currentActivities],
@@ -1186,67 +1197,93 @@ export function ActivityPage({
   // Track pending drag start (to distinguish click from drag)
   const dragPending = useRef<{ ids: number[]; startX: number; startY: number; pointerId: number } | null>(null);
   const dragActiveIds = useRef<number[] | null>(null);
+  const dragCapture = useRef<{ element: HTMLElement; pointerId: number } | null>(null);
   const DRAG_THRESHOLD = 5;
 
+  const resetDrag = useCallback(() => {
+    const capture = dragCapture.current;
+    dragCapture.current = null;
+    dragPending.current = null;
+    dragActiveIds.current = null;
+    setGhost(null);
+    dragState.clear();
+    if (capture?.element.hasPointerCapture(capture.pointerId)) {
+      capture.element.releasePointerCapture(capture.pointerId);
+    }
+  }, []);
+
+  useEffect(() => {
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && dragCapture.current) { event.preventDefault(); resetDrag(); }
+    };
+    const cancelWhenHidden = () => { if (document.hidden) resetDrag(); };
+    // The source row can disappear during a live refresh. A final event may
+    // then land on the document instead of the original pointer-capture owner.
+    const releaseOutsideSource = (event: PointerEvent) => {
+      if (dragCapture.current?.pointerId === event.pointerId) resetDrag();
+    };
+    window.addEventListener('blur', resetDrag);
+    window.addEventListener('keydown', cancelOnEscape);
+    window.addEventListener('pointerup', releaseOutsideSource);
+    window.addEventListener('pointercancel', releaseOutsideSource);
+    window.addEventListener('lostpointercapture', releaseOutsideSource, true);
+    document.addEventListener('visibilitychange', cancelWhenHidden);
+    return () => {
+      window.removeEventListener('blur', resetDrag);
+      window.removeEventListener('keydown', cancelOnEscape);
+      window.removeEventListener('pointerup', releaseOutsideSource);
+      window.removeEventListener('pointercancel', releaseOutsideSource);
+      window.removeEventListener('lostpointercapture', releaseOutsideSource, true);
+      document.removeEventListener('visibilitychange', cancelWhenHidden);
+      resetDrag();
+    };
+  }, [resetDrag]);
+
   const pointerDragProps = useCallback((ids: number[], options?: { onPress?: () => void }) => ({
-    style: { cursor: 'grab' } as React.CSSProperties,
+    'data-activity-drag-source': true,
+    draggable: false,
+    onDragStart: (event: React.DragEvent) => event.preventDefault(),
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
-      if (e.button !== 0) return;
-      if ((e.target as HTMLElement).closest('[data-no-drag="true"], button, input, select, textarea, label, a')) return;
-      dragPending.current = {
-        ids: resolveDragIds(ids),
-        startX: e.clientX,
-        startY: e.clientY,
-        pointerId: e.pointerId,
-      };
+      if (e.button !== 0 || !e.isPrimary) return;
+      if ((e.target as Element).closest('[data-no-drag="true"], button, input, select, textarea, label, a')) return;
+      e.preventDefault();
+      dragPending.current = { ids: resolveDragIds(ids), startX: e.clientX, startY: e.clientY, pointerId: e.pointerId };
       dragActiveIds.current = null;
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      dragCapture.current = { element: e.currentTarget, pointerId: e.pointerId };
+      dragState.prepare();
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { resetDrag(); }
     },
     onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
-      if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
-      const p = dragPending.current;
-      if (p) {
-        const dx = e.clientX - p.startX;
-        const dy = e.clientY - p.startY;
-        if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) {
-          dragPending.current = null;
-          dragActiveIds.current = p.ids;
-          e.preventDefault();
-          dragState.start(p.ids);
-          setGhost({ x: e.clientX, y: e.clientY, count: p.ids.length });
-        }
-        return;
+      if (dragCapture.current?.pointerId !== e.pointerId || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      if ((e.buttons & 1) === 0) { resetDrag(); return; }
+      const pending = dragPending.current;
+      if (pending) {
+        const dx = e.clientX - pending.startX;
+        const dy = e.clientY - pending.startY;
+        if (dx * dx + dy * dy <= DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+        dragPending.current = null;
+        dragActiveIds.current = pending.ids;
+        dragState.start(pending.ids);
       }
-      // Drag active — update ghost position and drop target
-      setGhost((g) => g ? { ...g, x: e.clientX, y: e.clientY } : null);
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const btn = el?.closest('[data-drop-project-id]');
-      const pid = btn ? parseInt(btn.getAttribute('data-drop-project-id') ?? '0', 10) : null;
-      dragState.setHover(pid && pid > 0 ? pid : null);
+      if (!dragActiveIds.current) return;
+      e.preventDefault();
+      dragState.setHover(projectAtPoint(e.clientX, e.clientY));
+      setGhost({ x: e.clientX, y: e.clientY, count: dragActiveIds.current.length });
     },
     onPointerUp: (e: React.PointerEvent<HTMLElement>) => {
-      if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      if (dragPending.current?.pointerId === e.pointerId) {
-        dragPending.current = null;
-        options?.onPress?.();
-        return;
-      }
-      const dragIds = dragActiveIds.current ? [...dragActiveIds.current] : null;
-      dragActiveIds.current = null;
-      if (!dragIds) return;
-      const projectId = dragState.getHover();
-      setGhost(null);
-      dragState.clear();
-      if (projectId) void handleDropRef.current(projectId, dragIds);
+      if (dragCapture.current?.pointerId !== e.pointerId) return;
+      const wasPress = dragPending.current?.pointerId === e.pointerId;
+      const ids = dragActiveIds.current ? [...dragActiveIds.current] : null;
+      const projectId = ids ? projectAtPoint(e.clientX, e.clientY) : null;
+      resetDrag();
+      if (wasPress) options?.onPress?.();
+      else if (projectId && ids) void handleDropRef.current(projectId, ids);
     },
-    onPointerCancel: () => {
-      dragPending.current = null;
-      dragActiveIds.current = null;
-      setGhost(null);
-      dragState.clear();
+    onPointerCancel: resetDrag,
+    onLostPointerCapture: (e: React.PointerEvent<HTMLElement>) => {
+      if (dragCapture.current?.pointerId === e.pointerId) resetDrag();
     },
-  }), [resolveDragIds]);
+  }), [resolveDragIds, resetDrag]);
 
   const timelineBlocks = normalizeTimelineActivities(filteredActivities);
   const totalSecs = currentActivities.reduce((sum, a) => sum + (a.duration_s ?? 0), 0);
@@ -1296,7 +1333,7 @@ export function ActivityPage({
           <div className="review-panel-heading">
             <div>
               <h2>Activities</h2>
-              <p>Select rows to assign them in bulk. Open an app for websites, windows, and individual records.</p>
+              <p>Drag an app or activity onto a sidebar project to assign it. Use the checkboxes to move several at once.</p>
             </div>
             <div className="review-panel-heading__actions">
               <div role="group" aria-label="Activity detail level" className="review-view-toggle">
@@ -1731,7 +1768,7 @@ export function ActivityPage({
                   >
                     {height > 20 && (
                       <span style={{
-                        fontSize: 10, fontWeight: 500, color: 'rgba(255,255,255,0.88)',
+                        fontSize: 10.5, fontWeight: 600, color: proj ? '#0c251e' : 'rgba(255,255,255,0.88)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}>
                         {a.app_name}
@@ -1908,7 +1945,10 @@ export function ActivityPage({
           whiteSpace: 'nowrap',
           userSelect: 'none',
         }}>
-          {ghost.count} {ghost.count === 1 ? 'activity' : 'activities'}
+          <strong>{ghost.count} {ghost.count === 1 ? 'activity' : 'activities'}</strong>
+          <span style={{ marginLeft: 8, color: 'rgba(255,255,255,0.6)' }}>
+            {dragState.getHover() ? `Release to assign to ${projectById.get(dragState.getHover()!)?.name ?? 'project'}` : 'Drop on a sidebar project · Esc to cancel'}
+          </span>
         </div>,
         document.body
       )}

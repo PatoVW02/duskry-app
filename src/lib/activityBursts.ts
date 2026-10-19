@@ -55,6 +55,7 @@ function confidentProjectIds(activities: Activity[]): number[] {
   return [...new Set(
     activities
       .filter((activity) => activity.project_id !== null)
+      .filter((activity) => activity.source !== 'best_guess')
       .filter((activity) => activity.assignment_confidence == null || activity.assignment_confidence >= LOW_CONFIDENCE_THRESHOLD)
       .map((activity) => activity.project_id as number),
   )];
@@ -82,10 +83,15 @@ function inferSuggestedProject(
     };
   }
 
+  const guessedProject = activities.find((activity) => activity.source === 'best_guess' && activity.project_id != null)?.project_id;
+  if (guessedProject != null) {
+    return { projectId: guessedProject, reason: 'Duskry suggested this project from your previous confirmations.' };
+  }
+
   const apps = new Set(activities.map((activity) => activity.app_name.toLocaleLowerCase()));
   const projectScores = new Map<number, number>();
   for (const activity of allActivities) {
-    if (activity.project_id == null || !apps.has(activity.app_name.toLocaleLowerCase())) continue;
+    if (activity.project_id == null || activity.source === 'best_guess' || !apps.has(activity.app_name.toLocaleLowerCase())) continue;
     const score = Math.max(activity.duration_s ?? 0, 1);
     projectScores.set(activity.project_id, (projectScores.get(activity.project_id) ?? 0) + score);
   }
@@ -123,6 +129,7 @@ function createBurst(activities: Activity[], allActivities: Activity[]): Activit
   const projectIds = confidentProjectIds(sorted);
   const needsAttention = sorted.some((activity) =>
     activity.project_id == null
+    || activity.source === 'best_guess'
     || (activity.assignment_confidence != null && activity.assignment_confidence < LOW_CONFIDENCE_THRESHOLD),
   );
   const suggestion = needsAttention

@@ -1,0 +1,46 @@
+.tracking-inbox { width: 100%; margin-bottom: 12px; font-size: 12px; }
+.tracking-inbox__trigger { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 9px 7px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: rgba(255,255,255,.66); text-align: left; font: inherit; cursor: pointer; transition: background 150ms, color 150ms; }
+.tracking-inbox__trigger > span { flex: 1; font-size: 11.5px; line-height: 1.35; }
+.tracking-inbox__trigger > svg { flex: none; color: #8bbfb5; }
+.tracking-inbox__trigger > strong { min-width: 19px; padding: 2px 5px; border-radius: 5px; background: rgba(45,212,191,.14); color: #89e8d5; text-align: center; font-size: 10.5px; }
+.tracking-inbox__trigger:hover,.tracking-inbox__trigger.is-open { background: rgba(94,234,212,.08); color: #eef9f5; border-color: rgba(94,234,212,.13); }
+.tracking-inbox__panel { position: fixed; bottom: 20px; left: min(200px,max(12px,calc(100vw - 452px))); z-index: 1200; width: min(420px,calc(100vw - 24px)); max-height: calc(100dvh - 40px); overflow: auto; color: #e5f0ed; border: 1px solid #3a554d; border-radius: 14px; background: #11221e; box-shadow: 0 20px 64px #02130dc4; padding: 0; font-size: 12px; }
+.tracking-inbox__panel:focus { outline: none; }
+.tracking-inbox__header { position: sticky; top: 0; z-index: 1; background: #11221e; display: flex; justify-content: space-between; align-items: flex-start; padding: 19px 21px; border-bottom: 1px solid #ffffff12; }
+.tracking-inbox__header h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
+.tracking-inbox__header p { margin: 5px 0 0; color: #9db9ae; font-size: 11.5px; }
+.tracking-inbox__header > button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #a8bfb5; cursor: pointer; }
+.tracking-inbox__header > button:hover { background: #ffffff0f; color: #fff; }
+.tracking-inbox__review { display: grid; gap: 17px; padding: 21px; }
+.tracking-inbox__activity { display: flex; align-items: flex-start; gap: 11px; }
+.tracking-inbox__app-icon { display: grid; place-items: center; flex: none; width: 37px; height: 37px; border: 1px solid #ffffff14; border-radius: 9px; color: #a9ccbd; background: #ffffff06; }
+.tracking-inbox__activity strong { display: block; padding-top: 1px; font-size: 13px; font-weight: 600; }
+.tracking-inbox__activity p { margin: 5px 0 0; line-height: 1.5; color: #a8bfb5; overflow-wrap: anywhere; }
+.tracking-inbox__current { padding: 10px 12px; border: 1px solid #ffffff10; border-radius: 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; background: #ffffff03; }
+.tracking-inbox__current span { color: #a8bfb5; font-size: 11px; }
+.tracking-inbox__current strong { font-size: 11.5px; text-align: right; overflow-wrap: anywhere; }
+.tracking-inbox__prompt { margin: 0; font-weight: 500; line-height: 1.5; }
+.tracking-inbox__remember { padding-top: 15px; border-top: 1px solid #ffffff12; }
+.tracking-inbox__privacy { margin: -6px 0 0; color: #94afa2; font-size: 11px; line-height: 1.5; }
+.tracking-inbox__actions { display: flex; gap: 9px; padding-top: 2px; }
+.tracking-inbox__actions .btn-secondary { width: auto; flex: 0 0 auto; }
+.tracking-inbox__actions .btn-primary { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.tracking-inbox__actions button { margin: 0; font-size: 12px; padding: 10px 12px; }
+.tracking-inbox__actions button:disabled { opacity: .5; cursor: not-allowed; }
+.tracking-inbox__list { display: grid; gap: 5px; margin: 0 21px 21px; padding-top: 17px; border-top: 1px solid #ffffff12; }
+.tracking-inbox__list h3 { margin: 0 0 5px; font-size: 11px; color: #a8bfb5; font-weight: 500; }
+.tracking-inbox__list button { position: relative; display: grid; gap: 3px; padding: 10px 28px 10px 10px; background: transparent; border: 1px solid transparent; border-radius: 7px; color: #d4e4dc; text-align: left; cursor: pointer; }
+.tracking-inbox__list button:hover { background: #ffffff06; border-color: #ffffff12; }
+.tracking-inbox__list strong { font-size: 11.5px; font-weight: 500; }
+.tracking-inbox__list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9bb9aa; font-size: 11px; }
+.tracking-inbox__list svg { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); }
+.tracking-inbox__error { margin: 16px 21px 0; padding: 11px 12px; border: 1px solid #fca5a535; border-radius: 8px; color: #fecaca; background: #ef44440d; line-height: 1.5; }
+.tracking-inbox__error p { margin: 0 0 5px; }
+.tracking-inbox__error button { color: inherit; text-decoration: underline; background: none; border: 0; cursor: pointer; padding: 0; }
+.tracking-inbox__evidence { color: #a8bfb5; font-size: 11.5px; line-height: 1.55; }
+.tracking-inbox__evidence summary { cursor: pointer; }
+.tracking-inbox__evidence p { margin: 7px 0 0; }
+.tracking-inbox__empty { padding: 34px 28px; text-align: center; }
+.tracking-inbox__empty > svg { color: #72d5b5; }
+.tracking-inbox__empty h3 { margin: 12px 0 8px; font-size: 15px; }
+.tracking-inbox__empty p { margin: 0; color: #a8bfb5; line-height: 1.65; }

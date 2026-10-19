@@ -7,19 +7,22 @@ interface Props { onNext: () => void; }
 
 export function NotificationsScreen({ onNext }: Props) {
   const [enabled, setEnabled] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleEnable = async () => {
-    await invoke('request_notification_permission');
-    setEnabled(true);
+    try {
+      await invoke('request_notification_permission');
+      setEnabled(true); setError(null);
+    } catch (reason) { setError(String(reason)); }
   };
 
   return (
     <OnboardingShell step={2} total={7}>
       <div>
-        <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 6 }}>Daily focus reminders</div>
+        <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 6 }}>Know what is being tracked</div>
         <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.45)', marginBottom: 16 }}>
-          Each morning, when you open your first app, Duskry sends a notification
-          so you can quickly set today's focus project.
+          Duskry tells you when a project session starts or an assignment needs review.
+          Confirm or correct the project, and remember its context for next time.
         </div>
       </div>
 
@@ -30,7 +33,7 @@ export function NotificationsScreen({ onNext }: Props) {
             Notifications
           </div>
           <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.45)', marginTop: 3 }}>
-            A daily prompt to set your focus project. You can change this later in Settings.
+            Session alerts with a quick path to correct assignments. Change this later in Settings.
           </div>
         </div>
         {enabled ? (
@@ -48,6 +51,7 @@ export function NotificationsScreen({ onNext }: Props) {
         )}
       </div>
 
+      {error && <p role="alert">{error}</p>}
       <button className="btn-primary" onClick={onNext} style={{ marginTop: 4 }}>
         {enabled ? 'Continue →' : 'Skip for now →'}
       </button>

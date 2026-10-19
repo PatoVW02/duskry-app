@@ -137,6 +137,14 @@ function App() {
   };
 
   useEffect(() => {
+    let disposed = false;
+    void invoke<string | null>('get_setting', { key: 'startup_page' }).then((value) => {
+      if (!disposed && value === 'reports') setPage('reports');
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, []);
+
+  useEffect(() => {
     loadSettings();
     fetchTier();
     fetchProjects();

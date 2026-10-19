@@ -16,6 +16,7 @@ pub struct ActiveWindow {
 
 #[cfg(target_os = "macos")]
 struct FrontWindowMetadata {
+    process_id: i64,
     app_name: String,
     raw_title: String,
     document_url: Option<String>,
@@ -114,6 +115,7 @@ fn discontinuity_end_at(previous_tick: i64, current_tick: i64, last_observed: i6
 }
 
 fn finish_current_activity_at(end_at: i64, reason: &str) {
+    crate::notify::reset_session();
     let activity_id = CURRENT_ACTIVITY_ID.swap(0, Ordering::SeqCst);
     if activity_id <= 0 {
         return;
@@ -299,6 +301,7 @@ fn tracking_worker_loop(generation: u64) {
     let mut tick_count: u64 = 0;
     let mut previous_tick_ts = Utc::now().timestamp();
     let mut consecutive_window_misses = 0_u32;
+    let mut last_decision_key = None;
 
     crate::logger::tlog(&format!(
         "Tracker worker #{} started (idle_threshold={}s, tick=5s)",
@@ -339,6 +342,7 @@ fn tracking_worker_loop(generation: u64) {
         if TRACKING_PAUSED.load(Ordering::SeqCst) {
             if !was_paused {
                 was_paused = true;
+                crate::notify::reset_session();
                 crate::logger::tlog("Tracking paused manually");
             }
             let prev_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
@@ -400,6 +404,7 @@ fn tracking_worker_loop(generation: u64) {
 
         if IS_IDLE_CACHED.load(Ordering::Relaxed) && !is_engaged() {
             if let Some(prev) = last.take() {
+                crate::notify::reset_session();
                 let now = Utc::now().timestamp();
                 let id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
                 if id > 0 {
@@ -428,7 +433,7 @@ fn tracking_worker_loop(generation: u64) {
             crate::logger::tlog("User active again — resuming tracking");
         }
 
-        if let Some(mut current) = get_active_window() {
+        if let Some(current) = get_active_window() {
             consecutive_window_misses = 0;
             if WORKER_GENERATION.load(Ordering::SeqCst) != generation {
                 crate::logger::tlog(&format!(
@@ -437,44 +442,38 @@ fn tracking_worker_loop(generation: u64) {
                 ));
                 break;
             }
-            // Electron apps (VS Code, etc.) temporarily report an empty
-            // window title when focus moves between internal panels.
-            // Suppress the flicker: if the app hasn't changed and the new
-            // title is empty while the previous title was non-empty, reuse
-            // the previous title so we don't split the activity.
-            if let Some(ref prev) = last {
-                if current.app_name == prev.app_name
-                    && current.window_title.is_empty()
-                    && !prev.window_title.is_empty()
-                {
-                    current.window_title = prev.window_title.clone();
+            let rules = crate::db::get_all_rules().unwrap_or_default();
+            let mut decision = determine_project(&current, &rules);
+            let rules_available = !crate::feature_flags::billing_plans_enabled()
+                || !matches!(
+                    crate::license::get_effective_tier(),
+                    crate::license::AppTier::Free | crate::license::AppTier::Expired
+                );
+            let prediction = if decision.is_none()
+                && rules_available
+                && !crate::rules::has_matching_rules(&current, &rules)
+            {
+                crate::db::get_learning_events()
+                    .ok()
+                    .and_then(|events| crate::automation::predict(&current, &events))
+            } else {
+                None
+            };
+            if crate::db::get_setting("uncertain_assignment_mode").as_deref() == Some("best_guess")
+            {
+                if let Some(ref predicted) = prediction {
+                    decision = Some(AssignmentDecision {
+                        project_id: predicted.project_id,
+                        source: "best_guess",
+                        rule_id: None,
+                        confidence: Some(predicted.confidence),
+                        reason: "suggestion from your previous confirmations; please review".into(),
+                    });
                 }
             }
-
-            let window_changed = last
-                .as_ref()
-                .map(|w| {
-                    w.app_name != current.app_name
-                        || w.window_title != current.window_title
-                        || w.file_path != current.file_path
-                })
-                .unwrap_or(true);
-
-            // Browser tabs can navigate without changing the window title. Refresh
-            // their URL every 15 seconds so domain rules and reports do not go stale.
-            let should_refresh_url = window_changed || tick_count.is_multiple_of(3);
-            if should_refresh_url {
-                let (url_observed, browser_url) = get_browser_url(&current.app_name);
-                if url_observed {
-                    current.url = browser_url;
-                } else if current.url.is_none() && !window_changed {
-                    current.url = last.as_ref().and_then(|w| w.url.clone());
-                }
-            } else if let Some(ref prev) = last {
-                current.url = prev.url.clone();
-            }
+            let decision_key = decision.as_ref().map(|d| (d.project_id, d.rule_id));
             let changed =
-                window_changed || last.as_ref().map(|w| w.url != current.url).unwrap_or(false);
+                attribution_changed(last.as_ref(), &current, last_decision_key, decision_key);
 
             // Periodic same-window tick log (every 15 s) so we can see the loop
             // is alive and what osascript is reporting even with no state changes.
@@ -561,34 +560,21 @@ fn tracking_worker_loop(generation: u64) {
                         CURRENT_ACTIVITY_ID.store(new_id, Ordering::SeqCst);
                         LAST_TRUSTWORTHY_OBSERVATION_TS.store(now, Ordering::SeqCst);
 
-                        // ── Daily focus notification ──────────────────
-                        if crate::notify::should_send_daily_notification() {
-                            crate::notify::mark_notification_sent();
-                            crate::notify::send_focus_notification();
-                        }
-
-                        // ── Auto-assign with focus-project priority ───
-                        if let Ok(rules) = crate::db::get_all_rules() {
-                            if let Some(decision) = determine_project(&current, &rules) {
-                                match crate::db::assign_activity_with_decision(
-                                    new_id,
-                                    decision.project_id,
-                                    decision.source,
-                                    decision.rule_id,
-                                    decision.confidence,
-                                    Some(&decision.reason),
-                                ) {
-                                    Ok(()) => crate::logger::tlog(&format!(
-                                        "  Auto-assigned #{} to project {} ({})",
-                                        new_id, decision.project_id, decision.reason
-                                    )),
-                                    Err(error) => crate::logger::tlog(&format!(
-                                        "  Failed to auto-assign #{}: {}",
-                                        new_id, error
-                                    )),
-                                }
+                        if let Some(ref decision) = decision {
+                            if let Err(error) = crate::db::assign_activity_with_decision(
+                                new_id,
+                                decision.project_id,
+                                decision.source,
+                                decision.rule_id,
+                                decision.confidence,
+                                Some(&decision.reason),
+                            ) {
+                                crate::logger::tlog(&format!(
+                                    "Failed to assign activity #{new_id}: {error}"
+                                ));
                             }
                         }
+                        last_decision_key = decision_key;
 
                         // Only advance `last` on success — if save failed,
                         // next tick will retry (changed=true again via last=None).
@@ -611,6 +597,10 @@ fn tracking_worker_loop(generation: u64) {
                         LAST_TRUSTWORTHY_OBSERVATION_TS.store(observed_at, Ordering::SeqCst);
                     }
                 }
+            }
+            let activity_id = CURRENT_ACTIVITY_ID.load(Ordering::SeqCst);
+            if let Ok(activity) = crate::db::get_activity(activity_id) {
+                crate::notify::observe(&activity, prediction.as_ref());
             }
         } else {
             // The OS could not safely identify the foreground process. This is
@@ -643,7 +633,7 @@ pub fn get_current_window() -> Option<ActiveWindow> {
 ///
 /// Priority (when a focus project is set):
 ///   - `rules_override_active_project = true` (default):
-///       1. Any app-name or URL rule match → wins
+///       1. Any matching project rule → wins
 ///       2. Focus project
 ///   - `rules_override_active_project = false`:
 ///       1. Focus project (always wins)
@@ -712,29 +702,45 @@ fn determine_project(
     // fourth project cannot keep receiving activity until the next UI refresh.
     let active_pid = active_project_for_today(rules_locked);
 
-    if active_pid > 0 {
-        // Free/Expired: rules don't apply, focus project always wins
-        if rules_locked {
-            return Some(focus_decision(active_pid));
-        }
-        let rules_override = crate::db::get_setting("rules_override_active_project")
-            .map(|v| v == "true")
-            .unwrap_or(true); // default ON
+    let rules_override =
+        crate::db::get_setting("rules_override_active_project").as_deref() != Some("false");
+    select_rule_or_focus(window, rules, active_pid, rules_override, rules_locked)
+}
 
-        if rules_override {
-            // App/URL rules beat the focus project
-            if let Some(matched) = crate::rules::apply_app_url_rules(window, rules) {
-                return Some(rule_decision(matched));
-            }
-        }
+fn select_rule_or_focus(
+    window: &ActiveWindow,
+    rules: &[crate::db::Rule],
+    active_pid: i64,
+    rules_override: bool,
+    rules_locked: bool,
+) -> Option<AssignmentDecision> {
+    if active_pid > 0 && (rules_locked || !rules_override) {
         return Some(focus_decision(active_pid));
     }
-
-    // No focus project → rules normally (skipped on free/expired)
     if rules_locked {
         return None;
     }
-    crate::rules::apply_rules(window, rules).map(rule_decision)
+    if let Some(matched) = crate::rules::apply_rules(window, rules) {
+        return Some(rule_decision(matched));
+    }
+    if crate::rules::has_matching_rules(window, rules) {
+        return None;
+    }
+    (active_pid > 0).then(|| focus_decision(active_pid))
+}
+
+fn attribution_changed(
+    previous: Option<&ActiveWindow>,
+    current: &ActiveWindow,
+    previous_project: Option<(i64, Option<i64>)>,
+    current_project: Option<(i64, Option<i64>)>,
+) -> bool {
+    previous.is_none_or(|p| {
+        p.app_name != current.app_name
+            || p.window_title != current.window_title
+            || p.file_path != current.file_path
+            || p.url != current.url
+    }) || previous_project != current_project
 }
 
 /// Run an osascript snippet with a hard timeout.
@@ -784,19 +790,17 @@ fn run_osascript(script: &str, timeout: Duration) -> Option<String> {
 pub fn get_active_window() -> Option<ActiveWindow> {
     let metadata = get_front_window_metadata()?;
     let app_name = metadata.app_name;
-    let raw_title = metadata.raw_title;
-    let file_path = metadata.document_path;
-    let document_url = metadata.document_url;
-    // URL is NOT fetched here — it is fetched by the tracking loop only when
-    // the window changes, keeping the hot-path osascript calls to one per tick.
-    let window_title = get_browser_title(&app_name)
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or(raw_title);
+    let (window_title, browser_url, file_path) =
+        get_browser_metadata(&app_name, metadata.process_id).unwrap_or((
+            metadata.raw_title,
+            metadata.document_url,
+            metadata.document_path,
+        ));
 
     Some(ActiveWindow {
         app_name,
         window_title,
-        url: document_url,
+        url: browser_url,
         file_path,
         timestamp: Utc::now().timestamp(),
     })
@@ -808,6 +812,7 @@ fn get_front_window_metadata() -> Option<FrontWindowMetadata> {
         r#"
 tell application "System Events"
     set frontProc to first application process whose frontmost is true
+    set frontPID to unix id of frontProc
     set frontApp to name of frontProc
     set frontTitle to ""
     set frontDocument to ""
@@ -826,21 +831,24 @@ tell application "System Events"
         end try
     end try
     set separatorCharacter to ASCII character 31
-    return frontApp & separatorCharacter & frontTitle & separatorCharacter & frontDocument
+    if not frontmost of frontProc then return ""
+    return (frontPID as text) & separatorCharacter & frontApp & separatorCharacter & frontTitle & separatorCharacter & frontDocument
 end tell
     "#,
         Duration::from_secs(3),
     )?;
 
-    let parts: Vec<&str> = result.splitn(3, '\u{1f}').collect();
-    let app_name = parts.first().unwrap_or(&"").trim().to_string();
+    let parts: Vec<&str> = result.splitn(4, '\u{1f}').collect();
+    let process_id = parts.first()?.parse::<i64>().ok()?;
+    let app_name = crate::automation::display_app_name(parts.get(1).unwrap_or(&""));
     if app_name.is_empty() {
         return None;
     }
-    let raw_title = parts.get(1).unwrap_or(&"").trim().to_string();
-    let (document_url, document_path) = classify_ax_document(parts.get(2).copied().unwrap_or(""));
+    let raw_title = parts.get(2).unwrap_or(&"").trim().to_string();
+    let (document_url, document_path) = classify_ax_document(parts.get(3).copied().unwrap_or(""));
 
     Some(FrontWindowMetadata {
+        process_id,
         app_name,
         raw_title,
         document_url,
@@ -875,57 +883,49 @@ fn classify_ax_document(value: &str) -> (Option<String>, Option<String>) {
 }
 
 #[cfg(target_os = "macos")]
-fn get_browser_title(app_name: &str) -> Option<String> {
-    let script = match app_name {
-        "Google Chrome" => {
-            r#"tell application "Google Chrome" to return title of active tab of front window"#
-        }
-        "Chromium" => {
-            r#"tell application "Chromium" to return title of active tab of front window"#
-        }
-        "Safari" => r#"tell application "Safari" to return name of current tab of front window"#,
-        "Microsoft Edge" => {
-            r#"tell application "Microsoft Edge" to return title of active tab of front window"#
-        }
-        "Brave Browser" => {
-            r#"tell application "Brave Browser" to return title of active tab of front window"#
-        }
-        "Arc" => r#"tell application "Arc" to return title of active tab of front window"#,
-        "Atlas" | "Atlas Browser" => {
-            r#"tell application "Atlas" to return title of active tab of front window"#
-        }
-        "Orion" => r#"tell application "Orion" to return title of active tab of front window"#,
-        "ChatGPT" => r#"tell application "ChatGPT" to return title of front window"#,
+fn get_browser_metadata(
+    app_name: &str,
+    process_id: i64,
+) -> Option<(String, Option<String>, Option<String>)> {
+    // Only a fixed, recognized application name becomes AppleScript code.
+    let application = match app_name {
+        "Google Chrome" | "Chromium" | "Safari" | "Microsoft Edge" | "Brave Browser" | "Arc"
+        | "Orion" => app_name,
+        "Atlas" | "Atlas Browser" => "Atlas",
         _ => return None,
     };
-    run_osascript(script, Duration::from_secs(2))
-}
-
-#[cfg(target_os = "macos")]
-fn get_browser_url(app_name: &str) -> (bool, Option<String>) {
-    let script = match app_name {
-        "Google Chrome" => {
-            r#"tell application "Google Chrome" to return URL of active tab of front window"#
-        }
-        "Chromium" => r#"tell application "Chromium" to return URL of active tab of front window"#,
-        "Safari" => r#"tell application "Safari" to return URL of current tab of front window"#,
-        "Microsoft Edge" => {
-            r#"tell application "Microsoft Edge" to return URL of active tab of front window"#
-        }
-        "Brave Browser" => {
-            r#"tell application "Brave Browser" to return URL of active tab of front window"#
-        }
-        "Arc" => r#"tell application "Arc" to return URL of active tab of front window"#,
-        "Atlas" | "Atlas Browser" => {
-            r#"tell application "Atlas" to return URL of active tab of front window"#
-        }
-        "Orion" => r#"tell application "Orion" to return URL of active tab of front window"#,
-        _ => return (false, None),
+    let (title, address) = if application == "Safari" || application == "Orion" {
+        (
+            "name of current tab of front window",
+            "URL of current tab of front window",
+        )
+    } else {
+        (
+            "title of active tab of front window",
+            "URL of active tab of front window",
+        )
     };
-    match run_osascript(script, Duration::from_secs(2)) {
-        Some(raw_url) => (true, crate::rules::normalized_host(&raw_url)),
-        None => (false, None),
-    }
+    let guard = format!(
+        r#"tell application "System Events"
+    if (unix id of first application process whose frontmost is true) is not {process_id} then return ""
+end tell"#
+    );
+    let script = format!(
+        r#"{guard}
+tell application "{application}"
+    set capturedTitle to {title}
+    set capturedURL to {address}
+    if ({title}) is not capturedTitle then return ""
+end tell
+{guard}
+return capturedTitle & (ASCII character 31) & capturedURL"#
+    );
+    let raw = run_osascript(&script, Duration::from_secs(2))?;
+    let (title, address) = raw.split_once('\u{1f}')?;
+    // Take website/document identity from the same browser snapshot as the title.
+    // AXDocument from an earlier tab must not be attached to a newly selected tab.
+    let (domain, document_path) = classify_ax_document(address);
+    Some((title.trim().to_string(), domain, document_path))
 }
 
 #[cfg(target_os = "windows")]
@@ -946,7 +946,7 @@ pub fn get_active_window() -> Option<ActiveWindow> {
             return None;
         }
 
-        let mut title_buf = [0u16; 512];
+        let mut title_buf = vec![0u16; 32_768];
         let title_len = GetWindowTextW(hwnd, &mut title_buf);
         let window_title = String::from_utf16_lossy(&title_buf[..title_len as usize]);
 
@@ -973,10 +973,11 @@ pub fn get_active_window() -> Option<ActiveWindow> {
             .unwrap_or_else(|| full_path.clone());
 
         Some(ActiveWindow {
-            app_name,
+            app_name: crate::automation::display_app_name(&app_name),
             window_title,
             url: None,
-            file_path: (!full_path.is_empty()).then_some(full_path),
+            // Executable paths do not identify the document/project being worked on.
+            file_path: None,
             timestamp: chrono::Utc::now().timestamp(),
         })
     }
@@ -985,11 +986,6 @@ pub fn get_active_window() -> Option<ActiveWindow> {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn get_active_window() -> Option<ActiveWindow> {
     None
-}
-
-#[cfg(not(target_os = "macos"))]
-fn get_browser_url(_app_name: &str) -> (bool, Option<String>) {
-    (false, None)
 }
 
 /// Reads raw HIDIdleTime from ioreg and returns seconds. Only called from the background watcher thread.
@@ -1138,9 +1134,73 @@ fn is_engaged() -> bool {
 
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::{
-        discontinuity_end_at, observation_gap_exceeded, should_end_attribution_after_misses,
-    };
+    use super::*;
+
+    fn observed_window() -> ActiveWindow {
+        ActiveWindow {
+            app_name: "Editor".into(),
+            window_title: "Duskry".into(),
+            url: None,
+            file_path: Some("/work/duskry/app.rs".into()),
+            timestamp: 1,
+        }
+    }
+
+    #[test]
+    fn focus_changes_and_lost_titles_split_ongoing_activity() {
+        let w = observed_window();
+        assert!(!attribution_changed(
+            Some(&w),
+            &w,
+            Some((1, None)),
+            Some((1, None))
+        ));
+        assert!(attribution_changed(
+            Some(&w),
+            &w,
+            Some((1, None)),
+            Some((2, None))
+        ));
+        let mut blank = w.clone();
+        blank.window_title.clear();
+        assert!(attribution_changed(Some(&w), &blank, None, None));
+    }
+
+    #[test]
+    fn title_and_file_rules_override_focus_but_conflicts_do_not_fall_back_to_it() {
+        let w = observed_window();
+        for (field, value) in [("title", "Duskry"), ("path", "/work/duskry/app.rs")] {
+            let rule = crate::db::Rule {
+                id: Some(1),
+                project_id: 2,
+                field: field.into(),
+                operator: "equals".into(),
+                value: value.into(),
+                priority: 0,
+                source: "manual".into(),
+                enabled: true,
+                confidence: None,
+                support_count: 0,
+                created_at: None,
+            };
+            assert_eq!(
+                select_rule_or_focus(&w, std::slice::from_ref(&rule), 1, true, false)
+                    .unwrap()
+                    .project_id,
+                2
+            );
+            assert_eq!(
+                select_rule_or_focus(&w, std::slice::from_ref(&rule), 1, false, false)
+                    .unwrap()
+                    .project_id,
+                1
+            );
+            let mut conflict = rule.clone();
+            conflict.id = Some(2);
+            conflict.project_id = 3;
+            assert!(select_rule_or_focus(&w, &[rule, conflict], 1, true, false).is_none());
+        }
+    }
 
     #[test]
     fn a_large_tick_gap_starts_a_new_attribution_window() {

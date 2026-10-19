@@ -12,8 +12,18 @@ Core capabilities in the current codebase include:
 - Project-based organization with manual assignment and auto-rules
 - Daily activity timeline and dashboard views
 - Reports and exports
+- Persistent tracking alerts with project corrections and local learning
+- Configurable uncertain assignments, background launch at login, and Reports on startup
 - Free, Pro, and Pro+ billing flows via Lemon Squeezy
 - Built-in auto-updater for desktop releases
+
+### Autonomous tracking
+
+Create projects and seed matching rules in **Rules**, using project-specific window text, websites, or document paths. In **Settings > Tracking behavior**, choose how unresolved activity should behave: **Ask me first** keeps suggestions unassigned until confirmation; **Assign the best suggestion** applies a suggestion from previous human confirmations and flags it for review. Conflicting explicit rules and activity without enough evidence stay unassigned. The separate **Learn rules from my corrections > Autopilot** setting controls creation of new learned rules using the existing multi-day confidence thresholds.
+
+Tracking alerts appear after 20 seconds of stable project/context activity, at most once per minute. They remain in the **Assignment inbox** even when system banners are disabled. Opening a notification selects its activity. Confirming a project records local learning evidence; **Remember this assignment** also creates a specific rule. The activity correction, learning evidence, rule, and inbox resolution are saved in one transaction. Automatic assignments are never used as training labels.
+
+Enable **Launch at login** to start in the background, and choose **Reports** under **Open Duskry to** for a report-focused workflow. System banner delivery depends on OS settings. Native notification activation and login launch require installed-app checks on macOS and Windows; browser tests use a mocked Tauri bridge. Windows currently captures application/window names but does not capture browser hostnames or document paths.
 
 ## Tech Stack
 
@@ -58,7 +68,7 @@ This repo uses a split release flow:
 
 ### 1. Bump the version
 
-Before releasing, update the desktop app version in `package.json`. The current version is `1.0.7`.
+Before releasing, update the desktop app version in `package.json` and add a matching entry to `src/whats-new.json`.
 
 The macOS release script syncs that version into `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, then validates configuration before building.
 

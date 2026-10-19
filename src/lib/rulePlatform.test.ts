@@ -13,10 +13,11 @@ describe('rule platform capabilities', () => {
     expect(detectMacOS('Win32', 'Mozilla/5.0 (Windows NT 10.0)')).toBe(false);
   });
 
-  it('hides URL rules when native tracking cannot capture hostnames', () => {
-    expect(supportedRuleFieldOptions(OPTIONS, false).map((option) => option.value)).toEqual(['app', 'path']);
+  it('hides URL and document rules when native tracking cannot capture them', () => {
+    expect(supportedRuleFieldOptions(OPTIONS, false).map((option) => option.value)).toEqual(['app']);
     expect(supportedRuleFieldOptions(OPTIONS, true)).toEqual(OPTIONS);
     expect(isRuleFieldSupported('url', false)).toBe(false);
+    expect(isRuleFieldSupported('path', false)).toBe(false);
     expect(isRuleFieldSupported('title', false)).toBe(true);
   });
 });

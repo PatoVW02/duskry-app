@@ -1,6 +1,33 @@
 {
   "versions": [
     {
+      "version": "1.1.5",
+      "title": "Tracking That Learns From You",
+      "summary": "Duskry can handle more of your day in the background, with clearer controls and a simple way to review and correct project assignments.",
+      "items": [
+        {
+          "icon": "SlidersHorizontal",
+          "text": "Choose whether uncertain activity waits for your confirmation or uses the best project suggestion, and control how corrections become learned rules."
+        },
+        {
+          "icon": "CheckSquare",
+          "text": "Get alerts when a project session starts or an assignment needs review. Use the sidebar Assignment inbox to confirm, correct, or remember a project."
+        },
+        {
+          "icon": "Clock3",
+          "text": "Launch Duskry at login and open directly to Reports for a workflow that needs less daily attention."
+        },
+        {
+          "icon": "Eye",
+          "text": "Improved app and window detection, project matching, timeline readability, and settings layouts in smaller windows."
+        },
+        {
+          "icon": "MousePointerClick",
+          "text": "Dragging activity to a sidebar project no longer selects text, and interrupted drags cancel cleanly."
+        }
+      ]
+    },
+    {
       "version": "1.1.4",
       "title": "Projects Within Reach",
       "summary": "Duskry now keeps projects close while you review activity, makes settings easier to navigate, and keeps every title readable across changing backgrounds.",
